@@ -75,7 +75,9 @@ class PipelineState:
 
     # HTML data captured by TrafficInterceptor for LOCRGX/XPath generation
     page_html:        Optional[str]                   = None         # rendered DOM
+    raw_static_html:  Optional[str]                   = None         # raw static HTTP GET response body
     html_candidates:  list[HTMLCandidate]              = field(default_factory=list)  # HTML XHR
+    failed_static_attempts: list[dict]                = field(default_factory=list)  # history of failed static attempts
 
     # Results from new generator steps
     locrgx_result:    Optional[LOCRGXResult]          = None

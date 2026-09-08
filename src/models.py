@@ -126,9 +126,17 @@ class LLMExtractionResult(BaseModel):
     field_jobtitle: Optional[str] = None
     field_jobid: Optional[str] = None
     field_location: Optional[str] = None
+    field_experience: Optional[str] = None
     field_joblink: Optional[str] = None
     field_jobdesc: Optional[str] = None
     collection_path: Optional[str] = None
+
+    # Detail page extraction fields (JDRGX / JDJSON)
+    move_to_jd: int = 0
+    jdrgx: Optional[str] = None
+    jdrgxseq: Optional[str] = None
+    jdrgx_patterns: list[dict[str, str]] = Field(default_factory=list)
+    jdjson_patterns: list[dict[str, str]] = Field(default_factory=list)
 
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     notes: Optional[str] = None
@@ -145,10 +153,14 @@ class LOCRGXResult(BaseModel):
     method: str = "GET"                      # "GET" | "POST"
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_body: Optional[str] = None       # POST body (e.g. WP admin-ajax)
-    locrgx: str                              # PCRE regex for listing page
-    locrgxseq: str                           # e.g. "JOBTITLE,LOCATION,JOBLINK,JOBID"
-    jdrgx: Optional[str] = None             # regex for JD detail page
+    locrgx: Optional[str] = None             # PCRE regex for listing page
+    locrgxseq: Optional[str] = None          # e.g. "JOBTITLE,LOCATION,JOBLINK,JOBID"
+    locjson: Optional[str] = None            # LOCJSON path if JSON extraction
+    locjsonseq: Optional[str] = None         # LOCJSONSEQ field list
+    jdrgx: Optional[str] = None             # regex for JD detail page (backward-compatible)
     jdrgxseq: Optional[str] = None
+    jdrgx_patterns: list[dict[str, str]] = Field(default_factory=list)
+    jdjson_patterns: list[dict[str, str]] = Field(default_factory=list)
     move_to_jd: int = 0                      # 0 = desc in listing, 1 = visit JD page
     max_pages: str = "1"                     # MAXPAGESPARSE
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)

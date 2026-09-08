@@ -31,6 +31,40 @@ import os
 import json
 from dataclasses import dataclass
 
+def normalize_source_text(s: str) -> str:
+    """
+    Deterministic normalization pipeline for raw HTML/JSON source content and candidate fields:
+      1. HTML entity unescaping (&quot; -> ", &#34; -> ", &#x22; -> ", &amp; -> &, etc.)
+      2. Unicode escape decoding (e.g. \u0022 -> ", \x22 -> ")
+      3. URL percent-decoding (e.g. %20 -> ' ', %22 -> '"')
+      4. Collapsing multiple whitespaces into a single space and lowercasing
+    """
+    if not s:
+        return ""
+    import html as html_module
+    from urllib.parse import unquote
+    
+    # 1. HTML entity decode (double decode handles &amp;#34; -> &#34; -> ")
+    norm = html_module.unescape(s)
+    norm = html_module.unescape(norm)
+    
+    # 2. URL decode
+    try:
+        norm = unquote(norm)
+    except Exception:
+        pass
+
+    # 3. Unicode escape decode
+    try:
+        norm = norm.encode('utf-8').decode('unicode_escape')
+    except Exception:
+        pass
+
+    # 4. Collapse whitespace and lower-case
+    norm = re.sub(r'\s+', ' ', norm).lower().strip()
+    return norm
+
+
 @dataclass
 class ValidationWeights:
     strong_negative_phrase: float = -3.0
@@ -56,6 +90,11 @@ class ValidationConfig:
             "login", "register", "about", "privacy", "contact", "home", "search",
             "support", "faq", "facebook", "twitter", "linkedin", "instagram", "youtube", "pinterest"
         }
+        self.job_id_negative_tokens = {
+            "javascript:", "onclick", "tab-", "btn-", "item-", "modal", "accordion",
+            "collapse", "widget", "content-", "class=", "href=", "true", "false",
+            "null", "undefined", "apply", "details"
+        }
 
     def load_from_file(self, file_path: str):
         try:
@@ -78,6 +117,7 @@ class ValidationConfig:
                 self.strong_negative_phrases = data.get("strong_negative_phrases", self.strong_negative_phrases)
                 self.strong_negative_tokens = set(data.get("strong_negative_tokens", self.strong_negative_tokens))
                 self.weak_negative_tokens = set(data.get("weak_negative_tokens", self.weak_negative_tokens))
+                self.job_id_negative_tokens = set(data.get("job_id_negative_tokens", self.job_id_negative_tokens))
                 logger.info("ValidationConfig: loaded configuration from %s", file_path)
         except Exception as e:
             logger.warning("ValidationConfig: failed to load configuration from %s, using defaults: %s", file_path, e)
@@ -135,9 +175,15 @@ def score_title(title: str, val_config: ValidationConfig = VAL_CONFIG) -> float:
     return score
 
 
-def validate_job_objects(job_objects: list[dict[str, str]], expected_count: int) -> tuple[bool, str]:
+def validate_job_objects(
+    job_objects: list[dict[str, str]],
+    expected_count: int,
+    raw_source: Optional[str] = None
+) -> tuple[bool, str]:
     """
     Standardized, format-agnostic semantic validator for job objects.
+    Enforces Title quality, validates LOCATION/EXPERIENCE/JOBID against raw source to prevent hallucinations,
+    and protects JOBDESC completeness.
     """
     if not job_objects:
         return False, "No jobs extracted."
@@ -146,9 +192,13 @@ def validate_job_objects(job_objects: list[dict[str, str]], expected_count: int)
     unique_titles = set()
     empty_titles_count = 0
     noise_titles_count = 0
+    explicit_job_ids: list[str] = []
+
+    # Prepare normalized raw source for fast substring verification
+    norm_raw_source = normalize_source_text(raw_source) if raw_source else ""
 
     for job in job_objects:
-        # Check JOBTITLE
+        # 1. Check JOBTITLE
         title = job.get("JOBTITLE", "").strip()
         if not title:
             empty_titles_count += 1
@@ -160,6 +210,58 @@ def validate_job_objects(job_objects: list[dict[str, str]], expected_count: int)
         score = score_title(title)
         if score < 0.0:
             noise_titles_count += 1
+
+        # 2. Check JOBID (Validate length, negative noise tokens, and normalized raw source presence)
+        job_id = job.get("JOBID", "").strip()
+        if job_id and job_id.lower() not in {"null", "none", ""}:
+            explicit_job_ids.append(job_id)
+            if len(job_id) > 60:
+                return False, f"Extracted JOBID is excessively long ({len(job_id)} chars), likely matched non-ID content."
+            
+            job_id_lower = job_id.lower()
+            if any(tok in job_id_lower for tok in VAL_CONFIG.job_id_negative_tokens) or any(c in job_id for c in ["<div", "<button", "<script", "{", "}"]):
+                return False, f"Extracted JOBID contains invalid UI or JS noise: '{job_id[:30]}'."
+            
+            # If JOBID is distinct from JOBTITLE (i.e. explicitly captured ID, not title fallback), verify existence in normalized raw source
+            if job_id.lower() != title.lower() and norm_raw_source:
+                norm_id = normalize_source_text(job_id)
+                if norm_id and norm_id not in norm_raw_source:
+                    return False, f"Extracted JOBID '{job_id}' not found in normalized raw source (hallucination detected)."
+
+        # 3. Check LOCATION (Validate against normalized raw source, catch hallucinations)
+        loc = job.get("LOCATION", "").strip()
+        if loc and loc.lower() not in {"null", "none", ""}:
+            if len(loc) > 100:
+                return False, f"Extracted LOCATION is excessively long ({len(loc)} chars), likely matched non-location text."
+            if loc.lower().startswith(("http://", "https://")) or "<div" in loc.lower() or "<script" in loc.lower():
+                return False, f"Extracted LOCATION contains invalid URL or HTML markup: '{loc[:30]}'."
+            if norm_raw_source:
+                norm_loc = normalize_source_text(loc)
+                if norm_loc and norm_loc not in norm_raw_source:
+                    return False, f"Extracted LOCATION '{loc}' not found in raw source (hallucination detected)."
+
+        # 4. Check EXPERIENCE (Validate against normalized raw source, catch sliced paragraphs)
+        exp = job.get("EXPERIENCE", "").strip()
+        if exp and exp.lower() not in {"null", "none", ""}:
+            if len(exp) > 60:
+                return False, f"Extracted EXPERIENCE is too long ({len(exp)} chars), likely sliced from a job description paragraph."
+            if "<div" in exp.lower() or "{" in exp or "}" in exp:
+                return False, f"Extracted EXPERIENCE contains invalid markup/JSON syntax: '{exp[:30]}'."
+            if norm_raw_source:
+                norm_exp = normalize_source_text(exp)
+                if norm_exp and norm_exp not in norm_raw_source:
+                    return False, f"Extracted EXPERIENCE '{exp}' not found in raw source (hallucination detected)."
+
+        # 5. Protect JOBDESC (Hard regression check)
+        desc = job.get("JOBDESC", "").strip()
+        if desc and len(desc) < 30 and total_jobs <= 3:
+            return False, f"Extracted JOBDESC is abnormally short ({len(desc)} chars), likely truncated."
+
+    # Check if all jobs share an identical non-title JOBID (likely static container/class ID)
+    if total_jobs > 1 and explicit_job_ids and len(explicit_job_ids) == total_jobs:
+        first_id = explicit_job_ids[0].lower()
+        if all(jid.lower() == first_id for jid in explicit_job_ids) and first_id not in {t.lower() for t in unique_titles}:
+            return False, f"All matched elements share the identical non-title JOBID: '{explicit_job_ids[0]}'. Likely matching a static layout identifier."
 
     # 1. Reject if too many empty titles
     if empty_titles_count > 0:
@@ -240,8 +342,10 @@ def validate_regex_jobs(locrgx: str, locrgxseq: str, html: str, expected_count: 
     config = {"LOCRGX": locrgx, "LOCRGXSEQ": locrgxseq}
     try:
         job_list = ReplayEngine.run(config, page_html=html)
-        is_valid, err_msg = validate_job_objects(job_list, expected_count)
+        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=html)
         return is_valid, err_msg, job_list
+    except TimeoutError:
+        return False, "Regex execution timed out (>2.0s) due to potential catastrophic backtracking (ReDoS). Please simplify the regex and avoid chained wildcards.", []
     except Exception as e:
         return False, f"Regex validation exception: {e}", []
 
@@ -253,7 +357,7 @@ def validate_xpath_jobs(page_html: str, xpath: str, expected_count: int) -> tupl
     config = {"xpath": xpath}
     try:
         job_list = ReplayEngine.run(config, page_html=page_html)
-        is_valid, err_msg = validate_job_objects(job_list, expected_count)
+        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=page_html)
         return is_valid, err_msg, job_list
     except Exception as e:
         return False, f"XPath validation exception: {e}", []

@@ -96,7 +96,8 @@ class Compiler:
         inp: GeneratorInput,
         result: LLMExtractionResult,
         candidate: Optional[CapturedRequest] = None,
-        jd_strategy: Optional[JDStrategyResult] = None
+        jd_strategy: Optional[JDStrategyResult] = None,
+        enforce_jd_consistency: bool = True
     ) -> JperlConfig:
         """Build a full JPERL config from LLM extraction output."""
         body: dict[str, Any] = copy.deepcopy(JPERL_DEFAULTS)
@@ -113,8 +114,20 @@ class Compiler:
         if joblink:
             body["LANDINGJOBLINK"] = joblink
 
-        # ── MOVE_TO_JD from LLM notes ─────────────────────────────────────────
-        body["MOVE_TO_JD"] = self._extract_move_to_jd(result)
+        # ── MOVE_TO_JD from LLM notes or result ──────────────────────────────
+        move_to_jd = getattr(result, "move_to_jd", None)
+        if move_to_jd is None or move_to_jd == 0:
+            move_to_jd = self._extract_move_to_jd(result)
+        body["MOVE_TO_JD"] = move_to_jd
+
+        # ── Detail extraction patterns (JDJSON1..N / JDRGX1..N) ────────────────
+        self._inject_jd_patterns(
+            body,
+            jdrgx_patterns=getattr(result, "jdrgx_patterns", None),
+            jdjson_patterns=getattr(result, "jdjson_patterns", None),
+            legacy_jdrgx=getattr(result, "jdrgx", None),
+            legacy_jdrgxseq=getattr(result, "jdrgxseq", None)
+        )
 
         # ── LOCJSON field mappings ────────────────────────────────────────────
         json_mappings = self._build_locjson_mappings(result, candidate)
@@ -137,6 +150,10 @@ class Compiler:
         # ── POSTQUERY ─────────────────────────────────────────────────────────
         body["POSTQUERY"] = self._build_postquery(inp)
 
+        # ── Enforce MOVE_TO_JD detail extractor consistency ──────────────────
+        if enforce_jd_consistency:
+            self._enforce_move_to_jd_consistency(body, inp.site_id)
+
         logger.info(
             "Compiler (LLM): compiled full JPERL config for site_id=%s (confidence=%.2f)",
             inp.site_id, result.confidence,
@@ -150,6 +167,7 @@ class Compiler:
         inp: GeneratorInput,
         result: LOCRGXResult,
         page_html: Optional[str] = None,
+        raw_static_html: Optional[str] = None,
         jd_strategy: Optional[JDStrategyResult] = None
     ) -> JperlConfig:
         """
@@ -161,10 +179,40 @@ class Compiler:
         """
         body: dict[str, Any] = copy.deepcopy(JPERL_DEFAULTS)
 
-        # Remove LOCJSON fields (not used in LOCRGX path)
-        for k in list(body.keys()):
-            if k.startswith("LOCJSON"):
-                del body[k]
+        if result.locjson and result.locjsonseq:
+            locjson = result.locjson.strip()
+            locjsonseq = result.locjsonseq.strip()
+            # Architectural Invariant: Ensure JOBID is present in LOCJSONSEQ
+            json_fields = [f.strip() for f in locjsonseq.split(",") if f.strip()]
+            if json_fields and "JOBID" not in [f.split("=")[0] for f in json_fields]:
+                if any(f.startswith("JOBLINK") for f in json_fields):
+                    jl_field = [f for f in json_fields if f.startswith("JOBLINK")][0]
+                    jl_path = jl_field.split("=")[1] if "=" in jl_field else ""
+                    json_fields.append(f"JOBID={jl_path}" if jl_path else "JOBID")
+                elif any(f.startswith("JOBTITLE") for f in json_fields):
+                    jt_field = [f for f in json_fields if f.startswith("JOBTITLE")][0]
+                    jt_path = jt_field.split("=")[1] if "=" in jt_field else ""
+                    json_fields.append(f"JOBID={jt_path}" if jt_path else "JOBID")
+                locjsonseq = ",".join(json_fields)
+
+            body["LOCJSON"] = locjson
+            body["LOCJSONSEQ"] = locjsonseq
+            if "LOCRGX" in body:
+                del body["LOCRGX"]
+            if "LOCRGXSEQ" in body:
+                del body["LOCRGXSEQ"]
+        else:
+            locrgx = (result.locrgx or "").strip()
+            locrgxseq = (result.locrgxseq or "").strip()
+
+            locrgx, locrgxseq = self._ensure_locrgx_jobid(locrgx, locrgxseq)
+
+            body["LOCRGX"] = locrgx
+            body["LOCRGXSEQ"] = locrgxseq
+            # Remove LOCJSON fields (not used in LOCRGX path)
+            for k in list(body.keys()):
+                if k.startswith("LOCJSON"):
+                    del body[k]
 
         # URL field (use custom endpoint if present, otherwise default to careers page URL)
         if result.source_url:
@@ -183,8 +231,6 @@ class Compiler:
         else:
             body["URL"] = inp.career_site_url
 
-        body["LOCRGX"]       = result.locrgx
-        body["LOCRGXSEQ"]    = result.locrgxseq
         body["MOVE_TO_JD"]   = result.move_to_jd
         import math
         if inp.jobs_on_career_page > 0:
@@ -194,61 +240,73 @@ class Compiler:
         else:
             body["MAXPAGESPARSE"] = result.max_pages
 
-        if result.jdrgx:
-            body["JDRGX1"]    = result.jdrgx
-            body["JDRGXSEQ1"] = result.jdrgxseq or "JOBDESC"
+        # ── Detail extraction patterns (JDRGX1..N / JDJSON1..N) ────────────────
+        self._inject_jd_patterns(
+            body,
+            jdrgx_patterns=getattr(result, "jdrgx_patterns", None),
+            jdjson_patterns=getattr(result, "jdjson_patterns", None),
+            legacy_jdrgx=result.jdrgx,
+            legacy_jdrgxseq=result.jdrgxseq
+        )
 
         # Compile JOBLINK template
         raw_val = ""
-        if page_html and result.locrgx and result.locrgxseq:
+        fields = [f.strip() for f in (result.locrgxseq or "").split(",") if f.strip()]
+        if result.locrgx and fields:
             try:
-                # Strip comments
-                html_clean = re.sub(r'(?s)<!--.*?-->', '', page_html)
-                match = re.search(result.locrgx, html_clean)
-                if match:
-                    fields = [f.strip() for f in result.locrgxseq.split(",")]
-                    if "JOBLINK" in fields:
-                        jl_idx = fields.index("JOBLINK")
-                        if match.groups():
-                            if jl_idx < len(match.groups()):
+                # Try finding a match in raw_static_html or page_html
+                search_targets = [t for t in [raw_static_html, page_html] if t]
+                for target in search_targets:
+                    if not target:
+                        continue
+                    html_clean = re.sub(r'(?s)<!--.*?-->', '', target)
+                    match = re.search(result.locrgx, html_clean)
+                    if match:
+                        if "JOBLINK" in fields:
+                            jl_idx = fields.index("JOBLINK")
+                            if match.groups() and jl_idx < len(match.groups()):
                                 raw_val = match.group(jl_idx + 1).strip()
-                        else:
-                            raw_val = match.group(0).strip()
+                                break
+                        elif "JOBID" in fields:
+                            jid_idx = fields.index("JOBID")
+                            if match.groups() and jid_idx < len(match.groups()):
+                                raw_val = match.group(jid_idx + 1).strip()
+                                break
             except Exception as e:
-                logger.debug("Compiler: failed to parse raw joblink value from page HTML using regex: %s", e)
+                logger.debug("Compiler: failed to parse raw joblink value using regex: %s", e)
 
         # Fallback to checking jobs_sample
         if not raw_val and hasattr(result, "jobs_sample") and result.jobs_sample:
-            raw_val = result.jobs_sample[0].get("JOBLINK", "")
+            raw_val = result.jobs_sample[0].get("JOBLINK", "") or result.jobs_sample[0].get("JOBID", "")
 
         # If still no raw_val but we have evidences, let resolve_joblink_template align them
         if not raw_val and jd_strategy and jd_strategy.verified and jd_strategy.job_link_evidences:
             raw_val = jd_strategy.job_link_evidences[0].raw_url
 
-        if "JOBLINK" in (result.locrgxseq or ""):
-            joblink = self._resolve_joblink_template(raw_val, inp.career_site_url, jd_strategy)
-            if joblink:
+        if result.move_to_jd == 1:
+            joblink = ""
+            if "JOBLINK" in fields or "JOBID" in fields:
+                if raw_val.isdigit() and len(raw_val) >= 10 and ("zohorecruit" in inp.career_site_url or "jobs/Careers" in inp.career_site_url):
+                    joblink = f"{inp.career_site_url}/{{{{VARJOBLINK}}}}"
+                elif raw_val:
+                    joblink = self._resolve_joblink_template(raw_val, inp.career_site_url, jd_strategy)
+            
+            # If joblink was resolved and contains {{VARJOBLINK}}, use it; otherwise provide domain template fallback
+            if joblink and "{{VARJOBLINK}}" in joblink:
                 body["JOBLINK"] = joblink
-                body["LANDINGJOBLINK"] = joblink
+            elif raw_val and "/" in str(raw_val) and not str(raw_val).startswith("http"):
+                body["JOBLINK"] = f"{inp.career_site_url.rstrip('/')}/{{{{VARJOBLINK}}}}"
             else:
-                # Cannot derive a valid template — strip JOBLINK from LOCRGXSEQ to stay consistent.
-                # Fail closed: do not produce a config where {{VARJOBLINK}} has no source.
-                clean_fields = [
-                    f.strip() for f in (result.locrgxseq or "").split(",")
-                    if f.strip() and f.strip() != "JOBLINK"
-                ]
-                body["LOCRGXSEQ"] = ",".join(clean_fields)
-                body["JOBLINK"] = inp.career_site_url
-                body["LANDINGJOBLINK"] = inp.career_site_url
-                logger.warning(
-                    "Compiler (LOCRGX): LOCRGXSEQ contained JOBLINK but template could not be derived — "
-                    "stripped JOBLINK from LOCRGXSEQ and set JOBLINK=career_site_url to maintain consistency"
-                )
+                body["JOBLINK"] = f"{inp.career_site_url}/{{{{VARJOBLINK}}}}"
+            body["LANDINGJOBLINK"] = body["JOBLINK"]
         else:
             body["JOBLINK"] = inp.career_site_url
             body["LANDINGJOBLINK"] = inp.career_site_url
 
         body["POSTQUERY"] = self._build_postquery(inp)
+
+        # ── Enforce MOVE_TO_JD detail extractor consistency ──────────────────
+        self._enforce_move_to_jd_consistency(body, inp.site_id)
 
         logger.info(
             "Compiler (LOCRGX): compiled regex config for site_id=%s (move_to_jd=%d)",
@@ -405,7 +463,16 @@ class Compiler:
         # Level 1: Authoritative JobLinkEvidence (Strong Evidence)
         if jd_strategy and jd_strategy.verified and jd_strategy.job_link_evidences:
             # If strategy is verified, we must return only what evidence aligned, or fail closed
-            return self._align_joblink_template(jd_strategy.job_link_evidences)
+            tmpl = self._align_joblink_template(jd_strategy.job_link_evidences)
+            if tmpl:
+                # If raw_val is relative (does not start with http/https), but tmpl is bare {{VARJOBLINK}}
+                # because the DOM evidence captured already-resolved absolute URLs, fall through to prefix resolution.
+                if not raw_val.lower().startswith(("http://", "https://")) and tmpl.strip() == "{{VARJOBLINK}}":
+                    pass
+                else:
+                    return tmpl
+            else:
+                return None
 
         # Base domain resolution
         try:
@@ -433,14 +500,9 @@ class Compiler:
                 logger.debug("Compiler: rejecting relative extension '%s' (fail-closed)", raw_val)
                 return None
 
-        # Directory-aware join for simple relative IDs/UUIDs/Slugs
+        # Standard URL join for simple relative IDs/UUIDs/Slugs
         if base and source_page_url:
             clean_source = source_page_url.split("?")[0].split("#")[0]
-            if not clean_source.endswith("/"):
-                last_seg = clean_source.split("/")[-1]
-                if "." not in last_seg:
-                    clean_source += "/"
-            
             try:
                 resolved = urljoin(clean_source, raw_val)
                 idx = resolved.rfind(raw_val)
@@ -517,12 +579,14 @@ class Compiler:
         e.g., LOCJSON = "skills|X|location|X|title|X|slug|X|slug|XX|career_list"
               LOCJSONSEQ = "JOBDESC,LOCATION,JOBTITLE,JOBID,JOBLINK"
         """
+        job_id_path = result.field_jobid or result.field_joblink or result.field_jobtitle
         field_map = {
-            "JOBTITLE": result.field_jobtitle,
-            "JOBID":    result.field_jobid,
-            "LOCATION": result.field_location,
-            "JOBLINK":  result.field_joblink,
-            "JOBDESC":  result.field_jobdesc,
+            "JOBTITLE":   result.field_jobtitle,
+            "JOBID":      job_id_path,
+            "LOCATION":   result.field_location,
+            "EXPERIENCE": result.field_experience,
+            "JOBLINK":    result.field_joblink,
+            "JOBDESC":    result.field_jobdesc,
         }
 
         # Filter out empty paths
@@ -801,3 +865,159 @@ class Compiler:
             "Compiler: added JOBLINK extractor (%s) to LOCJSONSEQ — template='%s'",
             provenance_note, joblink_val,
         )
+
+    def _inject_jd_patterns(
+        self,
+        body: dict[str, Any],
+        jdrgx_patterns: Optional[list[dict[str, str]]] = None,
+        jdjson_patterns: Optional[list[dict[str, str]]] = None,
+        legacy_jdrgx: Optional[str] = None,
+        legacy_jdrgxseq: Optional[str] = None
+    ) -> None:
+        """
+        Symmetrically writes JDJSON1..N/JDJSONSEQ1..N and JDRGX1..N/JDRGXSEQ1..N.
+        Maintains backward compatibility with legacy single jdrgx/jdrgxseq fields.
+        """
+        # 1. Inject JDJSON patterns if available
+        if jdjson_patterns:
+            for idx, item in enumerate(jdjson_patterns, 1):
+                path = item.get("path", "").strip()
+                seq = item.get("seq", "JOBDESC").strip()
+                if path:
+                    body[f"JDJSON{idx}"] = path
+                    body[f"JDJSONSEQ{idx}"] = seq or "JOBDESC"
+
+        # 2. Inject JDRGX patterns if available
+        if jdrgx_patterns:
+            for idx, item in enumerate(jdrgx_patterns, 1):
+                pat = item.get("pattern", "").strip()
+                seq = item.get("seq", "JOBDESC").strip()
+                if pat:
+                    body[f"JDRGX{idx}"] = pat
+                    body[f"JDRGXSEQ{idx}"] = seq or "JOBDESC"
+        elif legacy_jdrgx and not jdjson_patterns and not any(k.startswith("JDRGX") for k in body):
+            body["JDRGX1"] = legacy_jdrgx
+            body["JDRGXSEQ1"] = legacy_jdrgxseq or "JOBDESC"
+
+    def _enforce_move_to_jd_consistency(self, body: dict[str, Any], site_id: str) -> None:
+        """
+        Enforce the core MOVE_TO_JD invariant:
+          IF MOVE_TO_JD == 1
+          THEN at least one verified JDRGX1..N or JDJSON1..N extractor pattern MUST be present.
+          Otherwise, raise ValueError to prevent emitting a broken crawler configuration.
+        """
+        if body.get("MOVE_TO_JD") == 1:
+            has_jdrgx = any(
+                k.startswith("JDRGX") and not k.startswith("JDRGXSEQ") and str(body[k]).strip()
+                for k in body
+            )
+            has_jdjson = any(
+                k.startswith("JDJSON") and not k.startswith("JDJSONSEQ") and str(body[k]).strip()
+                for k in body
+            )
+            if not (has_jdrgx or has_jdjson):
+                raise ValueError(
+                    f"Invalid JPERL configuration for site '{site_id}': "
+                    "MOVE_TO_JD=1 requires at least one verified JDRGX or JDJSON detail extractor."
+                )
+
+    @staticmethod
+    def _find_nth_capturing_group(pattern: str, target_idx: int) -> tuple[int, int]:
+        """
+        Find the start and end character indices of the target_idx-th (0-indexed)
+        capturing group in pattern. Returns (start_idx, end_idx) or (-1, -1).
+        """
+        cap_count = -1
+        i = 0
+        n = len(pattern)
+        while i < n:
+            if pattern[i] == '\\':
+                i += 2  # skip escaped character
+                continue
+            if pattern[i] == '(':
+                # Check if non-capturing or flag/lookaround: (?:, (?=, (?!, (?<=, (?<!, (?s, (?i, etc.
+                if i + 1 < n and pattern[i + 1] == '?':
+                    pass
+                else:
+                    cap_count += 1
+                    if cap_count == target_idx:
+                        depth = 1
+                        j = i + 1
+                        while j < n:
+                            if pattern[j] == '\\':
+                                j += 2
+                                continue
+                            if pattern[j] == '[':
+                                # Skip character class [...]
+                                j += 1
+                                while j < n:
+                                    if pattern[j] == '\\':
+                                        j += 2
+                                        continue
+                                    if pattern[j] == ']':
+                                        j += 1
+                                        break
+                                    j += 1
+                                continue
+                            if pattern[j] == '(':
+                                depth += 1
+                            elif pattern[j] == ')':
+                                depth -= 1
+                                if depth == 0:
+                                    return (i, j + 1)
+                            j += 1
+            elif pattern[i] == '[':
+                # Skip character class
+                i += 1
+                while i < n:
+                    if pattern[i] == '\\':
+                        i += 2
+                        continue
+                    if pattern[i] == ']':
+                        i += 1
+                        break
+                    i += 1
+                continue
+            i += 1
+        return (-1, -1)
+
+    @classmethod
+    def _ensure_locrgx_jobid(cls, locrgx: str, locrgxseq: str) -> tuple[str, str]:
+        """
+        Ensures JOBID is present in LOCRGX and LOCRGXSEQ for JPERL prod crawler compatibility.
+        If missing, applies the fallback hierarchy:
+          Explicit JOBID -> JOBLINK -> Job-specific JOBTITLE
+        by nesting parentheses around the target capture group: ((...)).
+        """
+        if not locrgx or not locrgxseq:
+            return locrgx, locrgxseq
+
+        fields = [f.strip() for f in locrgxseq.split(",") if f.strip()]
+        if "JOBID" in fields:
+            return locrgx, locrgxseq
+
+        target_field = None
+        if "JOBLINK" in fields:
+            target_field = "JOBLINK"
+        elif "JOBTITLE" in fields:
+            target_field = "JOBTITLE"
+
+        if not target_field:
+            return locrgx, locrgxseq
+
+        target_idx = fields.index(target_field)
+        s, e = cls._find_nth_capturing_group(locrgx, target_idx)
+        if s == -1 or e == -1:
+            logger.warning("Compiler: could not find group %d for %s in locrgx '%s'", target_idx, target_field, locrgx)
+            return locrgx, locrgxseq
+
+        # Wrap target capture group in outer parentheses ((...))
+        new_locrgx = locrgx[:s] + "(" + locrgx[s:e] + ")" + locrgx[e:]
+        # Insert JOBID right before the target field
+        new_fields = list(fields)
+        new_fields.insert(target_idx, "JOBID")
+        new_locrgxseq = ",".join(new_fields)
+
+        return new_locrgx, new_locrgxseq
+
+

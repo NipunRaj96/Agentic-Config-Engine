@@ -82,3 +82,23 @@ class ReplayEngine:
 
         return job_list
 
+    @staticmethod
+    def run_detail(config: dict, detail_payload: Optional[str]) -> dict[str, str]:
+        """
+        Executes JDJSON1..N or JDRGX1..N against a detail response payload.
+        Returns a dictionary of extracted detail fields: e.g. {"JOBDESC": "...", "Date": "..."}
+        """
+        if not detail_payload:
+            return {}
+
+        # 1. Check JDJSON
+        if any(k.startswith("JDJSON") for k in config):
+            return JsonParser.execute_jd(config, detail_payload)
+
+        # 2. Check JDRGX
+        if any(k.startswith("JDRGX") for k in config):
+            return RegexParser.execute_jd(config, detail_payload)
+
+        return {}
+
+

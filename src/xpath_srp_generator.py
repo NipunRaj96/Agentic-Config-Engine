@@ -119,7 +119,7 @@ class XPathSRPGenerator(PipelineStep):
             return StepResult(StepSignal.CONTINUE)
 
         # Check SourceResolver decision
-        if state.source_decision:
+        if state.source_decision and not state.is_srp:
             if state.source_decision.source != SourceType.RENDERED_DOM:
                 logger.info("XPathSRPGenerator: skipping — source is not RENDERED_DOM")
                 return StepResult(StepSignal.CONTINUE)

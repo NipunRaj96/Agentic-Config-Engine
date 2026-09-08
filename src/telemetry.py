@@ -172,6 +172,7 @@ class TelemetryLogger:
                         "JOBTITLE": res.field_jobtitle,
                         "JOBID": res.field_jobid,
                         "LOCATION": res.field_location,
+                        "EXPERIENCE": res.field_experience,
                         "JOBLINK": res.field_joblink,
                         "JOBDESC": res.field_jobdesc
                     }

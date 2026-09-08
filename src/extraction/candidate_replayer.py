@@ -187,6 +187,56 @@ class CandidateReplayer:
                 error="Empty HTML response."
             )
 
+        # Check for embedded JSON first (e.g. Zoho Recruit id=jobs or script application/json / ld+json)
+        try:
+            from src.extraction.json_parser import JsonParser
+            extracted_json = JsonParser._extract_json_from_html(body)
+            if extracted_json:
+                jobs_list = []
+                if isinstance(extracted_json, list):
+                    jobs_list = extracted_json
+                elif isinstance(extracted_json, dict):
+                    for v in extracted_json.values():
+                        if isinstance(v, list) and v and isinstance(v[0], dict):
+                            jobs_list = v
+                            break
+                    if not jobs_list:
+                        jobs_list = [extracted_json]
+
+                if jobs_list and isinstance(jobs_list[0], dict):
+                    sample_items = []
+                    for j in jobs_list[:3]:
+                        title = str(j.get("Posting_Title") or j.get("title") or j.get("jobTitle") or j.get("name") or "").strip()
+                        job_id = str(j.get("id") or j.get("jobId") or j.get("job_id") or j.get("reqId") or "").strip()
+                        raw_link = str(j.get("url") or j.get("jobUrl") or j.get("link") or j.get("applyUrl") or "").strip()
+                        
+                        # If no direct link but we have a Zoho job id, construct canonical Zoho detail path
+                        if not raw_link and job_id and ("zohorecruit" in url or "jobs/Careers" in url):
+                            raw_link = f"/jobs/Careers/{job_id}"
+                        
+                        abs_link = urljoin(url, raw_link) if raw_link else ""
+                        if title:
+                            sample_items.append({
+                                "JOBTITLE": title,
+                                "JOBLINK": abs_link,
+                                "JOBID": job_id or (raw_link.split("/")[-1] if "/" in raw_link else title),
+                                "raw_href": raw_link,
+                            })
+
+                    if sample_items:
+                        return CandidateReplayResult(
+                            candidate_url=url,
+                            method=method,
+                            content_type="HTML_JSON",
+                            items_count=len(jobs_list),
+                            sample_items=sample_items,
+                            keys=["JOBTITLE", "JOBLINK", "JOBID"],
+                            has_descriptions=any(len(str(j.get("Job_Description") or j.get("description") or "")) > 200 for j in jobs_list),
+                            job_ids={s["JOBID"] for s in sample_items}
+                        )
+        except Exception as e:
+            logger.debug("CandidateReplayer: embedded JSON parse note: %s", e)
+
         # BS4 parsing method (Primary)
         if BeautifulSoup is not None:
             try:
@@ -194,13 +244,68 @@ class CandidateReplayer:
                 sample_items = []
                 has_descriptions = False
 
-                # Look for option tags first (common select dropdowns)
+                # 1. Repeating blocks, table rows, or anchor tags
+                job_blocks = []
+                for row in soup.find_all("tr"):
+                    anchors = row.find_all("a")
+                    if anchors:
+                        link = anchors[0].get("href", "").strip()
+                        title = anchors[0].get_text().strip() or row.get_text().strip()
+                        title = re.sub(r'\s+', ' ', title).strip()
+                        if len(title) > 4 and link and not link.startswith(("#", "javascript:")):
+                            job_blocks.append((title, link))
+
+                if len(job_blocks) < 3:
+                    for a in soup.find_all("a"):
+                        href = a.get("href", "").strip()
+                        title = a.get_text().strip()
+                        title = re.sub(r'\s+', ' ', title).strip()
+                        if len(title) > 6 and href and not href.startswith(("#", "javascript:")):
+                            if not any(w in href.lower() for w in ["facebook", "twitter", "linkedin", "instagram", "contact", "about", "privacy", "terms", "login", "register"]):
+                                job_blocks.append((title, href))
+
+                unique_blocks = []
+                seen = set()
+                for title, link in job_blocks:
+                    norm = (title.lower(), link.lower())
+                    if norm not in seen:
+                        seen.add(norm)
+                        unique_blocks.append((title, link))
+
+                if unique_blocks:
+                    for title, link in unique_blocks[:3]:
+                        abs_link = urljoin(url, link) if link else ""
+                        sample_items.append({
+                            "JOBTITLE": title,
+                            "JOBLINK": abs_link,
+                            "JOBID": link.split("/")[-1] if "/" in link else link,
+                            "raw_href": link,  # original href before urljoin — used for JOBLINK template derivation
+                        })
+
+                    for tag in ["div", "section", "article"]:
+                        for el in soup.find_all(tag, class_=re.compile(r"desc|detail|content|body", re.I)):
+                            if len(el.get_text()) > 200:
+                                has_descriptions = True
+                                break
+
+                    return CandidateReplayResult(
+                        candidate_url=url,
+                        method=method,
+                        content_type="HTML",
+                        items_count=len(unique_blocks),
+                        sample_items=sample_items,
+                        keys=["JOBTITLE", "JOBLINK", "JOBID"],
+                        has_descriptions=has_descriptions,
+                        job_ids={link.split("/")[-1] if "/" in link else link for title, link in unique_blocks}
+                    )
+
+                # 2. Fallback to option tags only if no anchor links were found
                 options = soup.find_all("option")
                 valid_options = []
                 for opt in options:
                     val = opt.get("value", "").strip()
                     txt = opt.get_text().strip()
-                    if val and txt and len(txt) > 2:
+                    if val and txt and len(txt) > 2 and not any(w in txt.lower() for w in ["select", "choose", "all", "filter"]):
                         valid_options.append((val, txt))
 
                 if len(valid_options) >= 3:
@@ -220,60 +325,6 @@ class CandidateReplayer:
                         has_descriptions=False,
                         job_ids={val for val, txt in valid_options}
                     )
-
-                # Fallback: repeating blocks, table rows, or anchor tags
-                job_blocks = []
-                for row in soup.find_all("tr"):
-                    anchors = row.find_all("a")
-                    if anchors:
-                        link = anchors[0].get("href", "").strip()
-                        title = anchors[0].get_text().strip() or row.get_text().strip()
-                        title = re.sub(r'\s+', ' ', title).strip()
-                        if len(title) > 4 and link:
-                            job_blocks.append((title, link))
-
-                if len(job_blocks) < 3:
-                    for a in soup.find_all("a"):
-                        href = a.get("href", "").strip()
-                        title = a.get_text().strip()
-                        title = re.sub(r'\s+', ' ', title).strip()
-                        if len(title) > 6 and href and not href.startswith(("#", "javascript:")):
-                            if not any(w in href.lower() for w in ["facebook", "twitter", "linkedin", "instagram", "contact", "about"]):
-                                job_blocks.append((title, href))
-
-                unique_blocks = []
-                seen = set()
-                for title, link in job_blocks:
-                    norm = (title.lower(), link.lower())
-                    if norm not in seen:
-                        seen.add(norm)
-                        unique_blocks.append((title, link))
-
-                for title, link in unique_blocks[:3]:
-                    abs_link = urljoin(url, link) if link else ""
-                    sample_items.append({
-                        "JOBTITLE": title,
-                        "JOBLINK": abs_link,
-                        "JOBID": link.split("/")[-1] if "/" in link else link,
-                        "raw_href": link,  # original href before urljoin — used for JOBLINK template derivation
-                    })
-
-                for tag in ["div", "section", "article"]:
-                    for el in soup.find_all(tag, class_=re.compile(r"desc|detail|content|body", re.I)):
-                        if len(el.get_text()) > 200:
-                            has_descriptions = True
-                            break
-
-                return CandidateReplayResult(
-                    candidate_url=url,
-                    method=method,
-                    content_type="HTML",
-                    items_count=len(unique_blocks),
-                    sample_items=sample_items,
-                    keys=["JOBTITLE", "JOBLINK", "JOBID"],
-                    has_descriptions=has_descriptions,
-                    job_ids={link.split("/")[-1] if "/" in link else link for title, link in unique_blocks}
-                )
             except Exception as e:
                 logger.warning("BeautifulSoup parsing failed, falling back to regex: %s", e)
 

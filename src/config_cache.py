@@ -120,8 +120,8 @@ class ConfigCacheStep(PipelineStep):
                 try:
                     dt = datetime.strptime(created_str, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
-                    # Fallback for ISO format
-                    dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    # Fallback for ISO format (strip tzinfo to keep offset-naive)
+                    dt = datetime.fromisoformat(created_str.replace("Z", "+00:00")).replace(tzinfo=None)
 
                 age_days = (datetime.utcnow() - dt).days
 

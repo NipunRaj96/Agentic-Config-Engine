@@ -6,24 +6,35 @@ Central configuration and constants.
 import os
 
 # ── Internal Infrastructure ────────────────────────────────────────────────────
-ROBOT_CHECKER_URL = "http://192.168.2.123:8015/checkRobot"
+ROBOT_CHECKER_URL: str = os.environ.get("ROBOT_CHECKER_URL", "")
+
+# ── LLM Provider Selector ──────────────────────────────────────────────────────
+# Options: "astra" | "naukri" | "gemini" | "groq"
+LLM_PROVIDER: str = os.environ.get("LLM_PROVIDER", "astra").lower().strip()
+
+# ── Astra Gen-AI Real-Time Execution Service ────────────────────────────────────
+ASTRA_BASE_URL: str      = os.environ.get("ASTRA_BASE_URL", os.environ.get("GENAI_BASE_URL", "")).rstrip("/")
+ASTRA_SECRET_KEY: str    = os.environ.get("ASTRA_SECRET_KEY", os.environ.get("SECRET_KEY", "")).strip()
+ASTRA_TEMPLATE_CODE: str = os.environ.get("ASTRA_TEMPLATE_CODE", os.environ.get("TEMPLATE_CODE", "")).strip()
+ASTRA_APP_ID: str        = os.environ.get("ASTRA_APP_ID", os.environ.get("APP_ID", "")).strip()
+ASTRA_SYSTEM_ID: str     = os.environ.get("ASTRA_SYSTEM_ID", os.environ.get("SYSTEM_ID", "")).strip()
 
 # ── Gemini API ─────────────────────────────────────────────────────────────────
 GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL: str   = "gemini-2.5-flash"
+GEMINI_MODEL: str   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # ── Groq API (fallback when Gemini is rate-limited) ────────────────────────────
 GROQ_API_KEY: str = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL: str   = "llama-3.3-70b-versatile"   # best Groq model for structured extraction
-GROQ_BASE_URL     = "https://api.groq.com/openai/v1"
+GROQ_MODEL: str   = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_BASE_URL: str = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
 # ── Naukri Gen-AI API Gateway ──────────────────────────────────────────────────
 NAUKRI_TOKEN: str = os.environ.get("NAUKRI_TOKEN", "")
-NAUKRI_EMAIL: str = os.environ.get("NAUKRI_EMAIL", "siddharth.garg@infoedge.com")
-NAUKRI_APP_ID: str = os.environ.get("NAUKRI_APP_ID", "123")
-NAUKRI_SYSTEM_ID: str = os.environ.get("NAUKRI_SYSTEM_ID", "123")
-NAUKRI_API_URL: str = os.environ.get("NAUKRI_API_URL", "https://dashboard.naukri.com/gen-ai/prompt/chat")
-NAUKRI_MODEL: str = os.environ.get("NAUKRI_MODEL", "gpt-5.6-luna")
+NAUKRI_EMAIL: str = os.environ.get("NAUKRI_EMAIL", "")
+NAUKRI_APP_ID: str = os.environ.get("NAUKRI_APP_ID", "")
+NAUKRI_SYSTEM_ID: str = os.environ.get("NAUKRI_SYSTEM_ID", "")
+NAUKRI_API_URL: str = os.environ.get("NAUKRI_API_URL", "")
+NAUKRI_MODEL: str = os.environ.get("NAUKRI_MODEL", "")
 
 # ── Playwright ─────────────────────────────────────────────────────────────────
 PLAYWRIGHT_TIMEOUT_MS: int = 30_000

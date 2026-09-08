@@ -57,12 +57,25 @@ COMPARE_COLS = [
 
 
 def load_csv(path: str) -> list[dict]:
+    if not os.path.exists(path):
+        return []
     with open(path, encoding="utf-8-sig", errors="replace") as f:
         return list(csv.DictReader(f))
 
 
 def run():
     os.makedirs("Testing/output", exist_ok=True)
+    try:
+        import sqlite3
+        conn = sqlite3.connect("knowledge_base/config_cache.db")
+        cur = conn.cursor()
+        for t in ["config_cache", "jd_strategy_cache"]:
+            cur.execute(f"DELETE FROM {t}")
+        conn.commit()
+        conn.close()
+        print("Cleared config_cache.db tables.")
+    except Exception as e:
+        print(f"Cache clear note: {e}")
 
     input_rows  = load_csv(INPUT_CSV)
     truth_rows  = load_csv(TRUTH_CSV)
@@ -154,7 +167,7 @@ def run():
                     total_tokens=tot_tok, tokens_per_job=tok_per_j,
                 )
                 if idx < total:
-                    print("Sleeping 10 seconds to avoid Gemini rate limits...")
+                    print("Sleeping 10 seconds to avoid rate limits...")
                     time.sleep(10.0)
                 continue
 

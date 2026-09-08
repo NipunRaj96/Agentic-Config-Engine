@@ -184,6 +184,7 @@ class TestCompilerFromLLM:
             field_jobid="id",
             field_location="location.name",
             field_joblink="url",
+            field_jobdesc="description",
             collection_path="jobs",
             confidence=0.88,
         )
@@ -194,8 +195,16 @@ class TestCompilerFromLLM:
         cfg = Compiler().from_llm(_make_input(), self._make_llm_result())
         assert "LOCJSON" in cfg.body
         assert "LOCJSONSEQ" in cfg.body
-        assert cfg.body["LOCJSONSEQ"] == "JOBTITLE,JOBID,LOCATION,JOBLINK"
-        assert cfg.body["LOCJSON"] == "title|X|id|X|location,name|X|url|XX|jobs"
+        assert cfg.body["LOCJSONSEQ"] == "JOBTITLE,JOBID,LOCATION,JOBLINK,JOBDESC"
+        assert cfg.body["LOCJSON"] == "title|X|id|X|location,name|X|url|X|description|XX|jobs"
+
+    def test_locjson_mapping_with_experience(self):
+        result = self._make_llm_result(field_experience="exp_required")
+        cfg = Compiler().from_llm(_make_input(), result)
+        assert "LOCJSON" in cfg.body
+        assert "LOCJSONSEQ" in cfg.body
+        assert "EXPERIENCE" in cfg.body["LOCJSONSEQ"]
+        assert "exp_required" in cfg.body["LOCJSON"]
 
     def test_locjson_walker_resolution(self):
         from src.models import CapturedRequest
@@ -203,7 +212,8 @@ class TestCompilerFromLLM:
             field_jobtitle="title",
             field_jobid="id",
             field_location="location.city",
-            field_joblink="url"
+            field_joblink="url",
+            field_jobdesc="desc"
         )
         response_body = json.dumps({
             "status": "success",
@@ -215,7 +225,8 @@ class TestCompilerFromLLM:
                         "location": {
                             "city": "Bangalore"
                         },
-                        "url": "https://company.com/job/12345"
+                        "url": "https://company.com/job/12345",
+                        "desc": "Work on Python crawlers"
                     }
                 ]
             }
@@ -226,8 +237,8 @@ class TestCompilerFromLLM:
             response_body=response_body
         )
         cfg = Compiler().from_llm(_make_input(), result, candidate)
-        assert cfg.body["LOCJSON"] == "url|X|location,city|X|title|X|id|XX|data,listings"
-        assert cfg.body["LOCJSONSEQ"] == "JOBLINK,LOCATION,JOBTITLE,JOBID"
+        assert cfg.body["LOCJSON"] == "desc|X|url|X|location,city|X|title|X|id|XX|data,listings"
+        assert cfg.body["LOCJSONSEQ"] == "JOBDESC,JOBLINK,LOCATION,JOBTITLE,JOBID"
 
     def test_location_dot_notation_converted(self):
         cfg = Compiler().from_llm(_make_input(), self._make_llm_result(field_location="jobs[],location,name"))
@@ -258,8 +269,16 @@ class TestCompilerFromLLM:
         assert cfg.body["MOVE_TO_JD"] == 0
 
     def test_move_to_jd_one_when_desc_absent(self):
-        cfg = Compiler().from_llm(_make_input(), self._make_llm_result(field_jobdesc=None))
+        cfg = Compiler().from_llm(
+            _make_input(),
+            self._make_llm_result(
+                field_jobdesc=None,
+                move_to_jd=1,
+                jdjson_patterns=[{"path": "data,description", "seq": "JOBDESC"}]
+            )
+        )
         assert cfg.body["MOVE_TO_JD"] == 1
+        assert cfg.body["JDJSON1"] == "data,description"
 
     def test_config_serialisable(self):
         cfg = Compiler().from_llm(_make_input(), self._make_llm_result())
@@ -421,7 +440,7 @@ class TestPipelineIntegration:
             request_headers={"Accept": "application/json"},
             pagination=PaginationInfo(type="none"),
             field_jobtitle="title", field_jobid="id",
-            field_location="location", confidence=0.9,
+            field_location="location", field_jobdesc="description", confidence=0.9,
         )
         gen = ConfigGenerator(steps=[
             _RobotStep(blocked=False),
@@ -500,7 +519,7 @@ class TestLOCRGXGenerator:
         assert "LOCRGXGenerator" in (state.output.tech_comments or "")
         assert "TechOps action" in (state.output.tech_comments or "")
 
-    def test_regex_validation_rejects_no_matches(self):
+    def test_regex_validation_rejects_no_matches_and_falls_back_to_srp(self):
         from src.locrgx_generator import LOCRGXGenerator
         bad_response = json.dumps({
             "locrgx": r'(?s)NOMATCH_PATTERN_XXXX([^<]+)',
@@ -517,9 +536,12 @@ class TestLOCRGXGenerator:
         state = self._make_state()
         result = gen.execute(_make_input(jobs_on_career_page=2), state)
         assert result.signal == StepSignal.CONTINUE
-        assert "matched 0" in (state.output.tech_comments or "")
+        assert mock_llm.call.call_count == 3  # Initial + Retry 1 + Retry 2
+        assert len(state.failed_static_attempts) == 3
+        assert state.is_srp is True
+        assert "static extraction failed after 3 attempts" in (state.output.tech_comments or "")
 
-    def test_regex_validation_self_healing_succeeds(self):
+    def test_regex_validation_self_healing_succeeds_on_retry_1(self):
         from src.locrgx_generator import LOCRGXGenerator
         bad_response = json.dumps({
             "locrgx": r'(?s)NOMATCH_PATTERN_XXXX([^<]+)',
@@ -531,7 +553,7 @@ class TestLOCRGXGenerator:
             "confidence": 0.9,
         })
         mock_llm = MagicMock()
-        # First call fails (matches 0), second call succeeds
+        # Attempt 1 fails (matches 0), Attempt 2 (Retry 1) succeeds
         mock_llm.call.side_effect = [bad_response, self._VALID_REGEX_RESPONSE]
         gen = LOCRGXGenerator(llm_client=mock_llm)
         state = self._make_state()
@@ -540,6 +562,57 @@ class TestLOCRGXGenerator:
         assert state.detection_path == "locrgx"
         assert state.locrgx_result.locrgx == json.loads(self._VALID_REGEX_RESPONSE)["locrgx"]
         assert mock_llm.call.call_count == 2
+        assert len(state.failed_static_attempts) == 2
+        assert state.failed_static_attempts[0]["error"] != "OK"
+        assert state.failed_static_attempts[1]["error"] == "OK"
+
+    def test_regex_validation_self_healing_succeeds_on_retry_2(self):
+        from src.locrgx_generator import LOCRGXGenerator
+        bad_response_1 = json.dumps({
+            "locrgx": r'(?s)NOMATCH_1_XXXX([^<]+)',
+            "locrgxseq": "JOBTITLE",
+            "move_to_jd": 0,
+            "max_pages": "1",
+            "confidence": 0.9,
+        })
+        bad_response_2 = json.dumps({
+            "locrgx": r'(?s)NOMATCH_2_YYYY([^<]+)',
+            "locrgxseq": "JOBTITLE",
+            "move_to_jd": 0,
+            "max_pages": "1",
+            "confidence": 0.9,
+        })
+        mock_llm = MagicMock()
+        # Attempt 1 fails, Attempt 2 fails, Attempt 3 (Retry 2) succeeds
+        mock_llm.call.side_effect = [bad_response_1, bad_response_2, self._VALID_REGEX_RESPONSE]
+        gen = LOCRGXGenerator(llm_client=mock_llm)
+        state = self._make_state()
+        result = gen.execute(_make_input(jobs_on_career_page=2), state)
+        assert result.signal == StepSignal.HALT_OK
+        assert state.detection_path == "locrgx"
+        assert mock_llm.call.call_count == 3
+        assert len(state.failed_static_attempts) == 3
+
+    def test_locjson_extraction_succeeds(self):
+        from src.locrgx_generator import LOCRGXGenerator
+        json_html = '<html><script id="jobData" type="application/json">{"jobs":[{"id":"101","title":"Software Engineer","url":"/job/101"},{"id":"102","title":"DevOps","url":"/job/102"}]}</script></html>'
+        locjson_response = json.dumps({
+            "locjson": "$.jobs[*]",
+            "locjsonseq": "JOBID=id,JOBTITLE=title,JOBLINK=url",
+            "move_to_jd": 0,
+            "max_pages": "1",
+            "confidence": 0.95,
+        })
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = locjson_response
+        gen = LOCRGXGenerator(llm_client=mock_llm)
+        state = self._make_state(html=json_html)
+        result = gen.execute(_make_input(jobs_on_career_page=2), state)
+        assert result.signal == StepSignal.HALT_OK
+        assert state.detection_path == "locrgx"
+        assert state.locrgx_result.locjson == "$.jobs[*]"
+        assert "JOBTITLE=title" in state.locrgx_result.locjsonseq
+        assert len(state.output.extracted_jobs) == 2
 
 
     def test_valid_regex_produces_halt_ok(self):
@@ -681,8 +754,7 @@ class TestCompilerNewPaths:
         )
         config = c.from_locrgx(_make_input(), result)
         body = config.body
-        assert body["LOCRGX"] == result.locrgx
-        assert body["LOCRGXSEQ"] == "JOBTITLE"
+        assert "JOBTITLE" in body["LOCRGXSEQ"]
         assert body["MOVE_TO_JD"] == 0
         assert body["URL"] == "https://testcorp.com/careers"   # direct page — URL field defaults to careers page url
 
@@ -1191,7 +1263,7 @@ class TestPrincipalArchitectImprovements:
         # 25 (endpoint) + 25 (jobs) + 15 (title) + 15 (id) = 80 -> 0.80
         assert score_partial == 0.80
 
-    def test_semantic_validation_scenarios(self):
+    def test_semantic_validation_scenarios(self, monkeypatch):
         from src.llm_reasoner import LLMReasoner
         from src.models import LLMExtractionResult, PaginationInfo
         
@@ -1253,6 +1325,27 @@ class TestPrincipalArchitectImprovements:
         assert score_title("Customer Support Representative") >= 0.0
         # Single "Support" word has support (-1) and no multiword bonus -> Reject (score < 0)
         assert score_title("Support") < 0.0
+
+        # Test Case 6: Verifies _validate_semantic handles MOVE_TO_JD adjustment without compiler UnboundLocalError
+        res_move = LLMExtractionResult(
+            api_url="https://api.acme.com/jobs",
+            field_jobtitle="title",
+            field_jobid="id",
+            field_joblink="link",
+            field_jobdesc="desc",
+            notes="",
+            jdrgx="(?s)<div class='desc'>(.+?)</div>",
+            jdrgxseq="JOBDESC"
+        )
+        resp_with_empty_desc = json.dumps([
+            {"title": "Software Engineer", "id": "1", "link": "https://example.com/job/1", "desc": ""},
+            {"title": "QA Analyst", "id": "2", "link": "https://example.com/job/2", "desc": ""}
+        ])
+        # Mock check_job_link_description to return True so MOVE_TO_JD adjustment triggers
+        monkeypatch.setattr("src.validation.check_job_link_description", lambda url: True)
+        is_valid, err, data = reasoner._validate_semantic(resp_with_empty_desc, res_move)
+        assert is_valid, f"Expected valid validation but got error: {err}"
+        assert res_move.notes and "MOVE_TO_JD=1" in res_move.notes
 
 
     def test_two_step_llm_reasoning(self, monkeypatch):
@@ -1379,7 +1472,7 @@ class TestCompilerStrictUrlResolution:
             "123",
             "https://example.com/careers"
         )
-        assert res == "https://example.com/careers/{{VARJOBLINK}}"
+        assert res == "https://example.com/{{VARJOBLINK}}"
 
     def test_directory_url_with_trailing_slash(self):
         from src.compiler import Compiler
@@ -1601,6 +1694,32 @@ class TestJobLinkRegressionAndInvariants:
         )
         assert res == "https://www.vitestork.com/{{VARJOBLINK}}"
 
+    def test_relative_slug_with_absolute_dom_evidence(self):
+        from src.compiler import Compiler
+        from src.models import JDStrategyResult, JDStrategyType, JobLinkEvidence
+        comp = Compiler()
+
+        # When Playwright DOM returns full resolved URLs for evidence, but raw regex value is a relative slug
+        evidence = [
+            JobLinkEvidence(
+                raw_url="https://www.tulassi.com/job-openings/support-engineer",
+                resolved_url="https://www.tulassi.com/job-openings/support-engineer",
+                source_page_url="https://www.tulassi.com/job-openings",
+                detail_page_url="https://www.tulassi.com/job-openings/support-engineer"
+            )
+        ]
+        strategy = JDStrategyResult(
+            strategy=JDStrategyType.GET_NAVIGATION,
+            verified=True,
+            job_link_evidences=evidence
+        )
+        res = comp._resolve_joblink_template(
+            "support-engineer",
+            "https://www.tulassi.com/job-openings",
+            strategy
+        )
+        assert res == "https://www.tulassi.com/{{VARJOBLINK}}"
+
     def test_samhita_double_map(self):
         from src.compiler import Compiler
         from src.models import LLMExtractionResult, GeneratorInput, PaginationInfo
@@ -1624,6 +1743,7 @@ class TestJobLinkRegressionAndInvariants:
             field_jobid="id",
             field_location="location",
             field_joblink=None,
+            field_jobdesc="description",
             notes="JOBLINK=https://samhita.org/careers/{{VARJOBLINK}}",
             confidence=0.9
         )
@@ -1708,6 +1828,7 @@ class TestJobLinkRegressionAndInvariants:
             field_jobid=None,
             field_location="location",
             field_joblink=None,
+            field_jobdesc="description",
             notes="JOBLINK=https://example.com/careers/{{VARJOBLINK}}",
             confidence=0.9
         )
@@ -1739,6 +1860,70 @@ class TestJobLinkRegressionAndInvariants:
         assert jobs[0]["JOBTITLE"] == "Software Engineer"
         assert jobs[0]["JOBID"] == "123"
         assert jobs[0]["JOBLINK"] == ""
+
+
+class TestEnsureLocrgxJobId:
+    def test_ensure_jobid_with_jobtitle_only(self):
+        from src.compiler import Compiler
+        from src.extraction.regex_parser import RegexParser
+        locrgx = r'(?s)<button[^>]*>\s*([^<]+?)\s*</button>'
+        locrgxseq = "JOBTITLE"
+        new_locrgx, new_locrgxseq = Compiler._ensure_locrgx_jobid(locrgx, locrgxseq)
+        
+        assert new_locrgxseq == "JOBID,JOBTITLE"
+        assert new_locrgx == r'(?s)<button[^>]*>\s*(([^<]+?))\s*</button>'
+        
+        # Test extraction
+        html = '<button>Python Developer</button>'
+        jobs = RegexParser.execute({"LOCRGX": new_locrgx, "LOCRGXSEQ": new_locrgxseq}, html)
+        assert len(jobs) == 1
+        assert jobs[0]["JOBID"] == "Python Developer"
+        assert jobs[0]["JOBTITLE"] == "Python Developer"
+
+    def test_ensure_jobid_with_joblink_fallback(self):
+        from src.compiler import Compiler
+        from src.extraction.regex_parser import RegexParser
+        locrgx = r'(?s)<a href="([^"]+)">\s*([^<]+?)\s*</a>'
+        locrgxseq = "JOBLINK,JOBTITLE"
+        new_locrgx, new_locrgxseq = Compiler._ensure_locrgx_jobid(locrgx, locrgxseq)
+        
+        assert new_locrgxseq == "JOBID,JOBLINK,JOBTITLE"
+        assert new_locrgx == r'(?s)<a href="(([^"]+))">\s*([^<]+?)\s*</a>'
+        
+        # Test extraction
+        html = '<a href="/jobs/101">Python Developer</a>'
+        jobs = RegexParser.execute({"LOCRGX": new_locrgx, "LOCRGXSEQ": new_locrgxseq}, html)
+        assert len(jobs) == 1
+        assert jobs[0]["JOBID"] == "/jobs/101"
+        assert jobs[0]["JOBLINK"] == "/jobs/101"
+        assert jobs[0]["JOBTITLE"] == "Python Developer"
+
+    def test_ensure_jobid_leaves_explicit_jobid_unchanged(self):
+        from src.compiler import Compiler
+        locrgx = r'(?s)<div data-id="([^"]+)">\s*([^<]+?)\s*</div>'
+        locrgxseq = "JOBID,JOBTITLE"
+        new_locrgx, new_locrgxseq = Compiler._ensure_locrgx_jobid(locrgx, locrgxseq)
+        
+        assert new_locrgx == locrgx
+        assert new_locrgxseq == locrgxseq
+
+    def test_ensure_jobid_extremeweb_pattern(self):
+        from src.compiler import Compiler
+        from src.extraction.regex_parser import RegexParser
+        locrgx = r'(?s)<div[^>]*class="[^"]*accordion-item[^"]*"[^>]*>\s*<h2[^>]*>\s*<button[^>]*>\s*([^<]+?)\s*</button>\s*</h2>\s*<div[^>]*class="[^"]*accordion-collapse[^"]*"[^>]*>\s*<div[^>]*class="[^"]*accordion-body[^"]*"[^>]*>\s*<ul[^>]*>((?:(?!</ul>)[\s\S])*)</ul>'
+        locrgxseq = "JOBTITLE,JOBDESC"
+        new_locrgx, new_locrgxseq = Compiler._ensure_locrgx_jobid(locrgx, locrgxseq)
+        
+        assert new_locrgxseq == "JOBID,JOBTITLE,JOBDESC"
+        assert r'<button[^>]*>\s*(([^<]+?))\s*</button>' in new_locrgx
+        
+        html = '''<div class="accordion-item"><h2 class="accordion-header"><button class="accordion-button">Android and IOS Developer</button></h2><div class="accordion-collapse"><div class="accordion-body"><ul><li>1 year exp</li></ul></div></div></div>'''
+        jobs = RegexParser.execute({"LOCRGX": new_locrgx, "LOCRGXSEQ": new_locrgxseq}, html)
+        assert len(jobs) == 1
+        assert jobs[0]["JOBID"] == "Android and IOS Developer"
+        assert jobs[0]["JOBTITLE"] == "Android and IOS Developer"
+        assert "1 year exp" in jobs[0]["JOBDESC"]
+
 
 
 

@@ -45,12 +45,23 @@ class ConfigCompileStep(PipelineStep):
                 state.output.tech_status   = TechStatus.FAILED
                 state.output.tech_comments = "Internal: LOCRGX result missing at compile stage."
                 return StepResult(StepSignal.HALT_FAIL, reason="missing-locrgx-result")
-            config = self._compiler.from_locrgx(
-                inp,
-                state.locrgx_result,
-                page_html=state.page_html,
-                jd_strategy=state.jd_strategy_result
-            )
+            try:
+                config = self._compiler.from_locrgx(
+                    inp,
+                    state.locrgx_result,
+                    page_html=state.page_html,
+                    raw_static_html=getattr(state, "raw_static_html", None),
+                    jd_strategy=state.jd_strategy_result
+                )
+            except ValueError as exc:
+                logger.error("ConfigCompileStep (LOCRGX): validation failed for site_id=%s: %s", inp.site_id, exc)
+                state.output.tech_status   = TechStatus.FAILED
+                state.output.sub_tech_comment = None
+                state.output.site_type = None
+                state.output.crawler_type = None
+                state.output.confidence = 0.0
+                state.output.tech_comments = f"Config compile error: {exc}"
+                return StepResult(StepSignal.HALT_FAIL, reason="invalid-config-missing-jd-extractor")
             state.output.config       = config
             state.output.jperl_config = config
             state.output.primary_config_type = "jperl"
@@ -101,12 +112,22 @@ class ConfigCompileStep(PipelineStep):
             if state.candidates:
                 sorted_cands = sorted(state.candidates, key=lambda x: x.score, reverse=True)
                 best_candidate = sorted_cands[0].captured if sorted_cands else None
-            config = self._compiler.from_llm(
-                inp,
-                state.llm_result,
-                best_candidate,
-                jd_strategy=state.jd_strategy_result
-            )
+            try:
+                config = self._compiler.from_llm(
+                    inp,
+                    state.llm_result,
+                    best_candidate,
+                    jd_strategy=state.jd_strategy_result
+                )
+            except ValueError as exc:
+                logger.error("ConfigCompileStep (LLM): validation failed for site_id=%s: %s", inp.site_id, exc)
+                state.output.tech_status   = TechStatus.FAILED
+                state.output.sub_tech_comment = None
+                state.output.site_type = None
+                state.output.crawler_type = None
+                state.output.confidence = 0.0
+                state.output.tech_comments = f"Config compile error: {exc}"
+                return StepResult(StepSignal.HALT_FAIL, reason="invalid-config-missing-jd-extractor")
             state.output.config       = config
             state.output.jperl_config = config
             state.output.primary_config_type = "jperl"

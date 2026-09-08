@@ -21,6 +21,7 @@ from src.config import (
     GEMINI_API_KEY, GEMINI_MODEL,
     GROQ_API_KEY, GROQ_BASE_URL, GROQ_MODEL,
 )
+from src.jd_extractor import JDExtractor
 from src.llm_client import LLMClient
 from src.models import (
     CapturedRequest,
@@ -375,6 +376,7 @@ class LLMReasoner(PipelineStep):
                     field_jobtitle=field_map.get("field_jobtitle"),
                     field_jobid=field_map.get("field_jobid"),
                     field_location=field_map.get("field_location"),
+                    field_experience=field_map.get("field_experience"),
                     field_joblink=field_map.get("field_joblink"),
                     field_jobdesc=field_map.get("field_jobdesc"),
                     notes="; ".join(notes_parts),
@@ -410,6 +412,45 @@ class LLMReasoner(PipelineStep):
 
         # Keep fields as clean paths, and set collection_path
         llm_result.collection_path = jobs_path_resolved
+
+        # ── Detail extraction (JDJSON / JDRGX) if MOVE_TO_JD=1 ────────────────
+        if move_to_jd == 1:
+            sample_detail_urls: list[str] = []
+            extracted_jobs = getattr(self, "_last_job_objects", []) or []
+            # 1. Check job_link_template resolution
+            if job_link_template and "{{VARJOBLINK}}" in job_link_template:
+                for job in extracted_jobs[:3]:
+                    raw_val = job.get("JOBLINK") or job.get("JOBID") or ""
+                    if raw_val:
+                        url = job_link_template.replace("{{VARJOBLINK}}", str(raw_val).strip())
+                        if url.startswith("http") and url not in sample_detail_urls:
+                            sample_detail_urls.append(url)
+            elif job_link_template and job_link_template.startswith("http"):
+                sample_detail_urls.append(job_link_template)
+            else:
+                # Check direct joblink values in extracted jobs
+                for job in extracted_jobs[:3]:
+                    link = job.get("JOBLINK")
+                    if link and str(link).startswith("http") and link not in sample_detail_urls:
+                        sample_detail_urls.append(str(link).strip())
+
+            if sample_detail_urls:
+                jd_extractor = JDExtractor(self._llm)
+                jd_res = jd_extractor.extract(inp, sample_detail_urls, request_headers=selected_candidate.request_headers)
+                if jd_res.strategy == "JDJSON" and jd_res.jdjson_patterns:
+                    llm_result.jdjson_patterns = jd_res.jdjson_patterns
+                    llm_result.move_to_jd = 1
+                    logger.info("LLMReasoner: JDJSON generated from %s (%d patterns)", sample_detail_urls[0], len(jd_res.jdjson_patterns))
+                elif jd_res.strategy == "JDRGX" and jd_res.jdrgx_patterns:
+                    llm_result.jdrgx = jd_res.jdrgx_patterns[0].get("pattern", "")
+                    llm_result.jdrgxseq = jd_res.jdrgx_patterns[0].get("seq", "JOBDESC")
+                    llm_result.jdrgx_patterns = jd_res.jdrgx_patterns
+                    llm_result.move_to_jd = 1
+                    logger.info("LLMReasoner: JDRGX generated from %s (%d patterns)", sample_detail_urls[0], len(jd_res.jdrgx_patterns))
+
+            if not (llm_result.jdjson_patterns or llm_result.jdrgx_patterns or llm_result.jdrgx):
+                logger.warning("LLMReasoner: move_to_jd=1 but no verified JDJSON or JDRGX detail extractor could be generated.")
+                return self._fallback_to_srp(inp, state, "move_to_jd=1 but detail extraction failed (no verified detail pattern).")
 
         state.llm_result = llm_result
         state.detection_path = "llm"
@@ -634,11 +675,12 @@ class LLMReasoner(PipelineStep):
 
             TASK:
             1. Map response fields to JPERL columns using dot-notation:
-               - JOBTITLE  : job title string
-               - JOBID     : unique job identifier
-               - LOCATION  : location / city
-               - JOBLINK   : field containing job detail URL or ID/slug
-               - JOBDESC   : full job description (only if present in listing response)
+               - JOBTITLE   : job title string
+               - JOBID      : unique job identifier
+               - LOCATION   : location / city (only if present in listing response)
+               - EXPERIENCE : experience / years required string (only if present in listing response)
+               - JOBLINK    : field containing job detail URL or ID/slug
+               - JOBDESC    : full job description (only if present in listing response)
             2. Map JOBLINK template:
                - If the sample contains a full job URL (starts with http) -> leave job_link_template as null.
                - If the sample contains a relative path or slug (starts with / or is a path) -> JPERL will resolve it using urljoin automatically, so leave job_link_template as null.
@@ -658,6 +700,7 @@ class LLMReasoner(PipelineStep):
               "field_jobtitle": "<dot.path>",
               "field_jobid": "<dot.path>",
               "field_location": "<dot.path or null>",
+              "field_experience": "<dot.path or null>",
               "field_joblink": "<dot.path or null>",
               "field_jobdesc": "<dot.path or null>",
               "job_link_template": "<absolute URL template containing {{{{VARJOBLINK}}}} or null>",
@@ -750,9 +793,19 @@ class LLMReasoner(PipelineStep):
                 career_site_url=llm_result.api_url
             )
 
+        from src.models import CapturedRequest
         from src.compiler import Compiler
         from src.extraction.replay_engine import ReplayEngine
         from src.validation import validate_job_objects, check_job_link_description
+
+        compiler = Compiler()
+        mock_cand = CapturedRequest(
+            url=llm_result.api_url,
+            method=llm_result.method or "GET",
+            response_status=200,
+            response_body=resp_text,
+            resource_type="xhr"
+        )
 
         # Check if fields are JPERL format (contain |XX|)
         is_jperl_format = (
@@ -763,16 +816,7 @@ class LLMReasoner(PipelineStep):
         if is_jperl_format:
             # Recompile and execute via ReplayEngine
             try:
-                from src.models import CapturedRequest
-                mock_cand = CapturedRequest(
-                    url=llm_result.api_url,
-                    method=llm_result.method or "GET",
-                    response_status=200,
-                    response_body=resp_text,
-                    resource_type="xhr"
-                )
-                compiler = Compiler()
-                jperl_cfg = compiler.from_llm(inp, llm_result, mock_cand)
+                jperl_cfg = compiler.from_llm(inp, llm_result, mock_cand, enforce_jd_consistency=False)
                 inner_config = jperl_cfg.body
                 job_objects = ReplayEngine.run(inner_config, api_response=resp_text, base_url=inp.career_site_url)
             except Exception as e:
@@ -789,12 +833,14 @@ class LLMReasoner(PipelineStep):
                     t = get_field_val(job, llm_result.field_jobtitle)
                     i = get_field_val(job, llm_result.field_jobid)
                     loc = get_field_val(job, llm_result.field_location)
+                    exp = get_field_val(job, llm_result.field_experience)
                     lnk = get_field_val(job, llm_result.field_joblink)
                     d = get_field_val(job, llm_result.field_jobdesc)
                     job_objects.append({
                         "JOBTITLE": str(t) if t is not None else "",
                         "JOBID": str(i) if i is not None else "",
                         "LOCATION": str(loc) if loc is not None else "",
+                        "EXPERIENCE": str(exp) if exp is not None else "",
                         "JOBLINK": str(lnk) if lnk is not None else "",
                         "JOBDESC": str(d) if d is not None else ""
                     })
@@ -836,7 +882,7 @@ class LLMReasoner(PipelineStep):
 
                 # Re-compile and re-execute playbacks
                 try:
-                    jperl_cfg = compiler.from_llm(inp, llm_result)
+                    jperl_cfg = compiler.from_llm(inp, llm_result, mock_cand, enforce_jd_consistency=False)
                     inner_config = jperl_cfg.body
                     job_objects = ReplayEngine.run(inner_config, api_response=resp_text, base_url=inp.career_site_url)
                 except Exception as re_err:
@@ -858,6 +904,7 @@ class LLMReasoner(PipelineStep):
         titles = [j.get("JOBTITLE", "") for j in job_objects if j.get("JOBTITLE")]
         ids = [j.get("JOBID", "") for j in job_objects if j.get("JOBID")]
         locations = [j.get("LOCATION", "") for j in job_objects if j.get("LOCATION")]
+        experiences = [j.get("EXPERIENCE", "") for j in job_objects if j.get("EXPERIENCE")]
         links = [j.get("JOBLINK", "") for j in job_objects if j.get("JOBLINK")]
         descs = [j.get("JOBDESC", "") for j in job_objects if j.get("JOBDESC")]
 
@@ -866,6 +913,7 @@ class LLMReasoner(PipelineStep):
             "titles": titles,
             "ids": ids,
             "locations": locations,
+            "experiences": experiences,
             "links": links,
             "descs": descs
         }

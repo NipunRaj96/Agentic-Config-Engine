@@ -264,6 +264,8 @@ def run_evaluation():
                     field_val = res.field_jobid
                 elif col_name == "LOCATION":
                     field_val = res.field_location
+                elif col_name == "EXPERIENCE":
+                    field_val = res.field_experience
                     
                 if field_val:
                     base_path = field_val.split("|XX|")[0]

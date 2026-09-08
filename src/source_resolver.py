@@ -157,6 +157,7 @@ class SourceResolver(PipelineStep):
 
         # ── Step 2: Fetch Raw HTML & Compare Business Objects (Job Titles) ──────────
         raw_static_html = self._fetch_raw_html(inp.career_site_url)
+        state.raw_static_html = raw_static_html
         
         source = SourceType.RENDERED_DOM
         if raw_static_html:
@@ -691,13 +692,42 @@ class SourceResolver(PipelineStep):
                 return SourceType.RENDERED_DOM
             return SourceType.STATIC_HTML
 
-        present_count = 0
-        for title in job_titles:
-            if title.lower() in raw_static_html.lower():
-                present_count += 1
+        import html as html_lib
+        normalized_static = html_lib.unescape(raw_static_html)
+        try:
+            normalized_static = normalized_static.encode('utf-8').decode('unicode_escape')
+        except Exception:
+            pass
+        normalized_static_lower = normalized_static.lower()
 
-        ratio = present_count / len(job_titles)
-        logger.info("SourceResolver: job titles present in static HTML: %d/%d (ratio=%.2f)", present_count, len(job_titles), ratio)
+        valid_job_titles = []
+        for t in job_titles:
+            if isinstance(t, str) and 3 <= len(t.strip()) <= 120:
+                c_title = t.strip()
+                if not any(token in c_title for token in ["$", "{", "}", "[", "]", ";", "()", "function", "var "]):
+                    valid_job_titles.append(c_title)
+
+        if not valid_job_titles:
+            valid_job_titles = [t for t in job_titles if isinstance(t, str) and t.strip()]
+
+        if not valid_job_titles:
+            return SourceType.RENDERED_DOM
+
+        present_count = 0
+        for title in valid_job_titles:
+            # Check exact match or normalized match in static HTML
+            t_lower = title.lower()
+            if t_lower in normalized_static_lower or t_lower in raw_static_html.lower():
+                present_count += 1
+            else:
+                # Also check normalized whitespace/punctuation match
+                t_sub = re.sub(r'[\u2010-\u2015\-_–—\s]+', ' ', t_lower).strip()
+                stat_sub = re.sub(r'[\u2010-\u2015\-_–—\s]+', ' ', normalized_static_lower)
+                if t_sub and t_sub in stat_sub:
+                    present_count += 1
+
+        ratio = present_count / len(valid_job_titles)
+        logger.info("SourceResolver: job titles present in static HTML: %d/%d (ratio=%.2f)", present_count, len(valid_job_titles), ratio)
 
         if ratio >= 0.8:
             return SourceType.STATIC_HTML
@@ -705,8 +735,9 @@ class SourceResolver(PipelineStep):
 
     @staticmethod
     def _clean_visible_text(html: str) -> str:
-        # Strip script, style, svg, head blocks
+        # Strip script, template, style, svg, head blocks
         text = re.sub(r'(?s)<script\b[^>]*>.*?</script>', ' ', html)
+        text = re.sub(r'(?s)<template\b[^>]*>.*?</template>', ' ', text)
         text = re.sub(r'(?s)<style\b[^>]*>.*?</style>', ' ', text)
         text = re.sub(r'(?s)<svg\b[^>]*>.*?</svg>', ' ', text)
         text = re.sub(r'(?s)<head\b[^>]*>.*?</head>', ' ', text)

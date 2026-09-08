@@ -21,6 +21,8 @@ import time
 from typing import Any, Optional
 
 from src.config import (
+    LLM_PROVIDER,
+    ASTRA_BASE_URL, ASTRA_SECRET_KEY, ASTRA_TEMPLATE_CODE, ASTRA_APP_ID, ASTRA_SYSTEM_ID,
     GEMINI_API_KEY, GEMINI_MODEL,
     GROQ_API_KEY, GROQ_BASE_URL, GROQ_MODEL,
     NAUKRI_TOKEN, NAUKRI_EMAIL, NAUKRI_APP_ID, NAUKRI_SYSTEM_ID, NAUKRI_API_URL, NAUKRI_MODEL,
@@ -39,10 +41,10 @@ _RETRY_DELAY_S = 2   # seconds to wait before Groq fallback
 
 class LLMClient:
     """
-    Gemini-primary, Groq-fallback LLM caller.
+    Unified multi-provider LLM caller supporting Astra GenAI, Naukri Gateway, Gemini, and Groq.
 
     Thread-safe after init (providers are stateless per-request).
-    Lazy: Gemini/Groq clients are initialised only on first call().
+    Lazy: Gemini/Groq clients and Astra session are initialised only on first call().
     """
 
     # Class-level token tracking
@@ -76,6 +78,10 @@ class LLMClient:
         self._current_key_idx = 0
         
         self._groq_client    = None   # lazy
+        self._astra_session  = None   # lazy requests.Session for Keep-Alive pooling
+        self._astra_token    = None
+        self._astra_token_expiry = 0.0
+        self._astra_template_schema = None
 
     # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -86,22 +92,55 @@ class LLMClient:
         model: Optional[str] = None
     ) -> Optional[str]:
         """
-        Send prompt to LLM. Returns raw text response, or None on failure.
-        Only uses Naukri API Gateway. Gemini and Groq fallbacks are disabled.
+        Send prompt to LLM based on LLM_PROVIDER ('astra', 'naukri', 'gemini', 'groq').
+        Returns raw text response, or None on failure.
         """
         temp = temperature if temperature is not None else self._temperature
         naukri_model = model if model is not None else self._naukri_model
+        provider = (LLM_PROVIDER or "astra").lower().strip()
 
-        if NAUKRI_TOKEN and NAUKRI_TOKEN.strip():
-            logger.info("LLMClient: Calling Naukri Gen-AI API Gateway")
-            response = self._call_naukri(prompt, temp, naukri_model)
-            if response is not None:
-                return response
-            logger.error("LLMClient: Naukri Gen-AI API Gateway request failed.")
+        if provider == "astra":
+            logger.info("LLMClient: Calling Astra Gen-AI Real-Time Service")
+            res = self._call_astra(prompt, temp)
+            if res is not None:
+                return res
+            logger.error("LLMClient: Astra Gen-AI Real-Time Service request failed.")
+            return None
+
+        elif provider == "naukri":
+            if NAUKRI_TOKEN and NAUKRI_TOKEN.strip():
+                logger.info("LLMClient: Calling Naukri Gen-AI API Gateway")
+                res = self._call_naukri(prompt, temp, naukri_model)
+                if res is not None:
+                    return res
+                logger.error("LLMClient: Naukri Gen-AI API Gateway request failed.")
+            else:
+                logger.error("LLMClient: NAUKRI_TOKEN is not configured.")
+            return None
+
+        elif provider == "gemini":
+            logger.info("LLMClient: Calling Gemini API")
+            res = self._call_gemini(prompt, temp)
+            if res is not None:
+                return res
+            logger.error("LLMClient: Gemini API request failed.")
+            return None
+
+        elif provider == "groq":
+            logger.info("LLMClient: Calling Groq API")
+            res = self._call_groq(prompt, temp)
+            if res is not None:
+                return res
+            logger.error("LLMClient: Groq API request failed.")
+            return None
+
         else:
-            logger.error("LLMClient: NAUKRI_TOKEN is not configured.")
-
-        return None
+            logger.warning("LLMClient: Unknown LLM_PROVIDER '%s'. Defaulting to Astra/Naukri check.", provider)
+            if ASTRA_SECRET_KEY:
+                return self._call_astra(prompt, temp)
+            if NAUKRI_TOKEN:
+                return self._call_naukri(prompt, temp, naukri_model)
+            return None
 
     # ── Gemini ──────────────────────────────────────────────────────────────────
 
@@ -486,3 +525,172 @@ class LLMClient:
                 if key in data and isinstance(data[key], str):
                     return data[key].strip()
         return None
+
+    # ── Astra Gen-AI Real-Time Service ──────────────────────────────────────────
+
+    def _get_astra_session(self):
+        """Initializes and returns a pooled requests.Session for persistent HTTP Keep-Alive."""
+        if self._astra_session is None:
+            import requests
+            self._astra_session = requests.Session()
+            self._astra_session.headers.update({
+                "User-Agent": "NaukriCrawlerGenAI/1.0",
+                "Accept": "application/json",
+            })
+            logger.info("LLMClient: Astra requests.Session initialized with connection pooling")
+        return self._astra_session
+
+    def _get_astra_template_schema(self, force_refresh: bool = False) -> Optional[dict]:
+        """Queries and caches the template schema (questionnaire input field IDs)."""
+        if self._astra_template_schema and not force_refresh:
+            return self._astra_template_schema
+
+        session = self._get_astra_session()
+        import urllib.parse
+        url = f"{ASTRA_BASE_URL}/conversation/template/data?templateCode={urllib.parse.quote(ASTRA_TEMPLATE_CODE)}"
+        headers = {
+            "AppId": ASTRA_APP_ID,
+            "SystemId": ASTRA_SYSTEM_ID,
+            "Content-Type": "application/json"
+        }
+        try:
+            resp = session.get(url, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                res = resp.json()
+                if isinstance(res, dict) and res.get("statusCode") == "0":
+                    self._astra_template_schema = res.get("data", {})
+                    return self._astra_template_schema
+                else:
+                    logger.warning("LLMClient: Astra template fetch returned status code %s: %s", resp.status_code, res)
+            else:
+                logger.warning("LLMClient: Astra template HTTP error %d: %s", resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("LLMClient: Failed to fetch Astra template schema: %s", exc)
+
+        return None
+
+    def _get_astra_session_token(self, force_refresh: bool = False) -> Optional[str]:
+        """Returns a valid 4-hour session token (cached for ~3.8 hours, auto-refreshed)."""
+        now = time.time()
+        if self._astra_token and now < self._astra_token_expiry and not force_refresh:
+            return self._astra_token
+
+        if not ASTRA_SECRET_KEY:
+            logger.error("LLMClient: ASTRA_SECRET_KEY / SECRET_KEY is not configured.")
+            return None
+
+        session = self._get_astra_session()
+        url = f"{ASTRA_BASE_URL}/conversation/transactional/token"
+        headers = {
+            "AppId": ASTRA_APP_ID,
+            "SystemId": ASTRA_SYSTEM_ID,
+            "Content-Type": "application/json",
+            "key": ASTRA_SECRET_KEY
+        }
+        try:
+            resp = session.get(url, headers=headers, timeout=15)
+            if resp.status_code == 200:
+                res = resp.json()
+                if isinstance(res, dict) and res.get("statusCode") == "0":
+                    self._astra_token = res.get("data")
+                    self._astra_token_expiry = now + (3.8 * 3600)
+                    logger.info("LLMClient: Successfully generated Astra 4-hour session token")
+                    return self._astra_token
+                else:
+                    logger.warning("LLMClient: Astra token generation returned status code %s: %s", resp.status_code, res)
+            else:
+                logger.warning("LLMClient: Astra token generation HTTP error %d: %s", resp.status_code, resp.text[:200])
+        except Exception as exc:
+            logger.warning("LLMClient: Failed to generate Astra session token: %s", exc)
+
+        return None
+
+    def _call_astra(self, prompt: str, temperature: float) -> Optional[str]:
+        """Submits prompt to Astra Real-Time Execution Service and returns generated text."""
+        session = self._get_astra_session()
+        token = self._get_astra_session_token()
+        if not token:
+            logger.error("LLMClient: Unable to acquire Astra session token.")
+            return None
+
+        # Build payload mapping from template questionnaire schema
+        schema = self._get_astra_template_schema()
+        questions = schema.get("questionnaire", []) if schema else []
+        payload = {}
+        if questions:
+            for q in questions:
+                q_id = str(q.get("id"))
+                payload[q_id] = prompt
+        else:
+            payload["330"] = prompt
+
+        url = f"{ASTRA_BASE_URL}/conversation/transactional/process"
+
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            headers = {
+                "AppId": ASTRA_APP_ID,
+                "SystemId": ASTRA_SYSTEM_ID,
+                "Content-Type": "application/json",
+                "key": token
+            }
+            try:
+                logger.info("LLMClient: Submitting prompt to Astra Real-Time Service (attempt %d/%d)", attempt + 1, max_attempts)
+                resp = session.post(url, headers=headers, json=payload, timeout=65)
+
+                if resp.status_code == 200:
+                    try:
+                        res = resp.json()
+                        if isinstance(res, dict) and res.get("statusCode") == "0":
+                            data_list = res.get("data", [])
+                            if data_list and isinstance(data_list[0], dict):
+                                first_item = data_list[0]
+                                result_map = first_item.get("result", {})
+                                
+                                # Track token telemetry
+                                usage_map = first_item.get("usage", {})
+                                p_tok = usage_map.get("prompt_tokens") or 0
+                                c_tok = usage_map.get("completion_tokens") or 0
+                                if p_tok or c_tok:
+                                    LLMClient.total_prompt_tokens += p_tok
+                                    LLMClient.total_completion_tokens += c_tok
+                                    LLMClient.total_calls += 1
+                                    logger.debug("LLMClient: Astra tokens: prompt=%d, completion=%d", p_tok, c_tok)
+
+                                # Extract primary output (R1 / R...)
+                                for k, v in result_map.items():
+                                    if k.startswith("R") and isinstance(v, str) and v.strip():
+                                        logger.info("LLMClient: Astra responded successfully (%d chars)", len(v.strip()))
+                                        return v.strip()
+
+                                # Fallback: return any non-echo text
+                                for k, v in result_map.items():
+                                    if k not in payload and isinstance(v, str) and v.strip():
+                                        return v.strip()
+
+                        logger.warning("LLMClient: Astra returned non-zero status or unexpected payload: %s", res)
+                    except Exception as parse_err:
+                        logger.warning("LLMClient: Failed to parse Astra response JSON: %s", parse_err)
+
+                elif resp.status_code in (401, 403):
+                    logger.warning("LLMClient: Astra session token rejected (HTTP %d). Refreshing token...", resp.status_code)
+                    token = self._get_astra_session_token(force_refresh=True)
+                    if not token:
+                        break
+                    continue
+                else:
+                    logger.warning("LLMClient: Astra returned HTTP %d: %s", resp.status_code, resp.text[:200])
+
+            except Exception as exc:
+                exc_str = str(exc)
+                if "timed out" in exc_str.lower():
+                    logger.warning("LLMClient: Astra request timed out (attempt %d/%d)", attempt + 1, max_attempts)
+                else:
+                    logger.warning("LLMClient: Astra connection error: %s", exc)
+
+            if attempt < max_attempts - 1:
+                token = self._get_astra_session_token(force_refresh=True)
+                time.sleep(1.5)
+
+        return None
+
