@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>AI-Config-Engine | TechOps Telemetry Console</title>
+  <link href="https://fonts.googleapis.com" rel="preconnect">
+  <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "surface-dim": "#0b0f17",
+            "surface-container-lowest": "#070a10",
+            "surface-container-low": "#131822",
+            "surface-container": "#181f2c",
+            "surface-container-high": "#1f2635",
+            "surface-container-highest": "#283244",
+            "primary": "#e0fdff",
+            "primary-container": "#00f2fe",
+            "primary-fixed": "#6ff6ff",
+            "primary-fixed-dim": "#00dce6",
+            "secondary": "#d0bcff",
+            "secondary-container": "#571bc1",
+            "tertiary": "#e1ffec",
+            "tertiary-container": "#67f4b7",
+            "tertiary-fixed": "#6ffbbe",
+            "tertiary-fixed-dim": "#4edea3",
+            "error": "#ffb4ab",
+            "error-container": "#93000a",
+            "on-surface": "#dfe2ef",
+            "on-surface-variant": "#94a3b8",
+            "outline": "#849495",
+            "outline-variant": "#2a3443"
+          },
+          fontFamily: {
+            "body-md": ["Inter", "sans-serif"],
+            "code-sm": ["JetBrains Mono", "monospace"],
+            "code-md": ["JetBrains Mono", "monospace"]
+          }
+        }
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bg-surface-dim text-on-surface antialiased selection:bg-primary-container selection:text-surface-container-lowest min-h-screen flex flex-col font-body-md overflow-x-hidden">
+
+  <!-- TOP NAVIGATION BAR -->
+  <header class="flex justify-between items-center w-full px-7 h-16 border-b border-white/[0.06] sticky top-0 z-50 bg-[#0b0f17]/90 backdrop-blur-xl">
+    <!-- Left: Brand & Engine Identity -->
+    <div class="flex items-center gap-8">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-primary-container/10 border border-primary-container/30 flex items-center justify-center text-primary-container shadow-[0_0_16px_rgba(0,242,254,0.25)]">
+          <span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">memory</span>
+        </div>
+        <div class="flex items-center gap-2.5">
+          <span class="text-xl font-bold text-primary tracking-tight">AI-Config-Engine</span>
+          <span class="text-xs font-mono px-2 py-0.5 rounded-full bg-surface-container-high text-primary-fixed-dim border border-white/10">v2.4.0</span>
+        </div>
+      </div>
+      <nav class="hidden xl:flex items-center gap-1">
+        <a class="px-3.5 py-1.5 rounded-lg text-primary-container font-medium text-xs font-mono bg-primary-container/10 border border-primary-container/20 transition-all" href="#">TechOps Console</a>
+      </nav>
+    </div>
+
+    <!-- Center: Gateway Status Indicator -->
+    <div class="hidden lg:flex items-center gap-3 px-4 py-1.5 rounded-full bg-surface-container-low border border-white/[0.08] shadow-inner">
+      <div class="flex items-center gap-2">
+        <span class="relative flex h-2 w-2">
+          <span id="connectionBeacon" class="status-beacon absolute inline-flex h-full w-full rounded-full bg-tertiary-container opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 bg-tertiary-container"></span>
+        </span>
+        <span id="connectionStatusText" class="text-xs text-tertiary font-medium">Gateway Active</span>
+      </div>
+      <span class="text-white/20">•</span>
+      <span class="text-xs text-on-surface-variant font-mono">Protocol: <span class="text-primary-container font-medium">WebSocket Live</span></span>
+    </div>
+
+    <!-- Right: Telemetry Node Badge -->
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-white/[0.08] text-xs font-mono">
+        <span class="material-symbols-outlined text-sm text-secondary">terminal</span>
+        <span class="text-on-surface font-medium">Auto Replay Sandbox</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN WORKBENCH CANVAS -->
+  <main class="flex-1 w-full max-w-[1840px] mx-auto p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+
+    <!-- LEFT COLUMN: CONTROL CENTER -->
+    <section class="lg:col-span-4 xl:col-span-4 flex flex-col gap-6">
+      <div class="glass-card rounded-2xl p-6 shadow-xl relative overflow-hidden">
+        <div class="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-primary-container/80 to-transparent"></div>
+
+        <!-- Header Row -->
+        <div class="flex items-center justify-between pb-5 border-b border-white/[0.08]">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-primary-container/10 flex items-center justify-center text-primary-container border border-primary-container/20">
+              <span class="material-symbols-outlined text-lg">tune</span>
+            </div>
+            <h2 class="text-lg font-semibold text-on-surface tracking-tight">Control Center</h2>
+          </div>
+          <!-- Mode Switcher Dropdown -->
+          <div class="relative">
+            <select id="modeSelect" onchange="onModeSelectChange(this)" class="bg-surface-container-low border border-white/[0.12] rounded-xl px-3 py-1.5 text-xs font-mono text-primary-fixed-dim focus:border-primary-container focus:ring-0 focus:outline-none cursor-pointer pr-8 shadow-sm">
+              <option value="single">Mode: Single Job</option>
+              <option value="batch">Mode: Batch CSV Upload</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 1. SINGLE JOB CONFIG FORM -->
+        <div id="singleJobForm" class="mt-6 space-y-5">
+          <!-- Crawler ID -->
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant">CRAWLER ID (COMPID)</label>
+              <button class="text-xs font-mono text-primary-container hover:text-primary transition-colors flex items-center gap-1 font-medium" onclick="copyCrawlerId()">
+                <span class="material-symbols-outlined text-xs">content_copy</span>
+                <span id="copyFeedbackText">copy</span>
+              </button>
+            </div>
+            <input id="crawlerIdInput" type="text" placeholder="e.g. 2360662" class="w-full bg-surface-container-lowest border border-white/[0.09] rounded-xl px-3.5 py-2.5 text-xs font-mono text-primary focus:border-primary-container focus:outline-none shadow-inner">
+          </div>
+
+          <!-- Company Name & Site ID Grid -->
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant block mb-2">COMPANY NAME</label>
+              <input id="companyNameInput" type="text" placeholder="e.g. Tulasi technologies" class="w-full bg-surface-container-lowest border border-white/[0.09] rounded-xl px-3.5 py-2.5 text-xs text-on-surface focus:border-primary-container focus:ring-1 focus:ring-primary-container focus:outline-none transition-all shadow-inner">
+            </div>
+            <div>
+              <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant block mb-2">SITE ID</label>
+              <input id="siteIdInput" type="text" placeholder="e.g. 2360662_SRP" class="w-full bg-surface-container-lowest border border-white/[0.09] rounded-xl px-3.5 py-2.5 text-xs text-on-surface focus:border-primary-container focus:ring-1 focus:ring-primary-container focus:outline-none transition-all shadow-inner">
+            </div>
+          </div>
+
+          <!-- Career Site URL -->
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant">CAREER SITE TARGET URL</label>
+              <span class="text-xs font-mono text-on-surface-variant/80">HTTP/HTTPS</span>
+            </div>
+            <div class="flex rounded-xl border border-white/[0.09] bg-surface-container-lowest overflow-hidden focus-within:border-primary-container focus-within:ring-1 focus-within:ring-primary-container shadow-inner">
+              <span class="bg-surface-container px-3 py-2.5 text-xs font-mono text-primary-fixed-dim border-r border-white/[0.06] flex items-center font-medium">GET</span>
+              <input id="careerSiteUrlInput" type="url" placeholder="https://www.tulassi.com/job-openings" class="w-full bg-transparent border-0 px-3.5 py-2.5 text-xs text-on-surface focus:ring-0 focus:outline-none font-mono">
+            </div>
+          </div>
+
+          <!-- Jobs On Page -->
+          <div>
+            <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant block mb-2">EXPECTED JOBS ON PAGE</label>
+            <div class="flex items-center rounded-xl border border-white/[0.09] bg-surface-container-lowest shadow-inner overflow-hidden max-w-[200px]">
+              <button class="px-3.5 py-2 text-on-surface-variant hover:text-primary hover:bg-white/[0.05] transition-colors" onclick="decrementJobs()">-</button>
+              <input id="jobsOnPageInput" type="text" value="10" class="w-full bg-transparent border-0 text-center py-2 text-xs font-mono text-on-surface focus:ring-0 focus:outline-none font-medium">
+              <button class="px-3.5 py-2 text-on-surface-variant hover:text-primary hover:bg-white/[0.05] transition-colors" onclick="incrementJobs()">+</button>
+            </div>
+          </div>
+
+          <!-- Integration Link (Optional) -->
+          <div>
+            <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant block mb-2">INTEGRATION LINK (OPTIONAL)</label>
+            <input id="integrationLinkInput" type="text" placeholder="Optional direct API or {{POST}} integration link" class="w-full bg-surface-container-lowest border border-white/[0.09] rounded-xl px-3.5 py-2.5 text-xs font-mono text-on-surface-variant focus:border-primary-container focus:outline-none shadow-inner">
+          </div>
+        </div>
+
+        <!-- 2. BATCH CSV UPLOAD FORM (Hidden by default) -->
+        <div id="batchCsvForm" class="mt-6 space-y-5 hidden">
+          <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant block">BATCH TARGET CSV INGESTION</label>
+          
+          <input type="file" id="batchCsvFileInput" accept=".csv" class="hidden">
+          
+          <div id="batchDropzone" class="border-2 border-dashed border-primary-container/30 hover:border-primary-container/60 rounded-2xl p-7 bg-surface-container-lowest/50 text-center flex flex-col items-center justify-center gap-2.5 cursor-pointer transition-all group">
+            <div class="w-14 h-14 rounded-2xl bg-primary-container/10 border border-primary-container/20 flex items-center justify-center text-primary-container group-hover:scale-105 transition-transform shadow-inner">
+              <span class="material-symbols-outlined text-2xl">upload_file</span>
+            </div>
+            <div class="text-sm text-on-surface font-medium">Drop .csv crawl list here or click to browse</div>
+            <div class="text-xs font-mono text-on-surface-variant">Expected columns: crawlerId, companyName, siteId, careerSiteUrl</div>
+          </div>
+
+          <!-- Uploaded File Preview -->
+          <div id="batchFilePreview" class="p-3.5 rounded-xl bg-surface-container-lowest border border-white/[0.08] flex items-center justify-between hidden">
+            <div class="flex items-center gap-3 overflow-hidden">
+              <span class="material-symbols-outlined text-tertiary-container text-2xl">description</span>
+              <div class="truncate">
+                <div id="batchFilenameText" class="text-xs font-mono text-on-surface font-medium truncate">input_records.csv</div>
+                <div id="batchFileMetaText" class="text-[10px] font-mono text-on-surface-variant">0 TARGETS • 0 KB</div>
+              </div>
+            </div>
+            <button onclick="removeUploadedCsv()" class="p-1.5 rounded-lg hover:bg-white/[0.08] text-on-surface-variant hover:text-error transition-colors" title="Remove File">
+              <span class="material-symbols-outlined text-base">close</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Controls: Force Refresh & Action Row -->
+        <div class="mt-6 pt-5 border-t border-white/[0.08] space-y-4">
+          <div class="flex items-center justify-between">
+            <label class="flex items-center gap-2.5 cursor-pointer select-none">
+              <input type="checkbox" id="forceRefreshCheckbox" checked class="rounded border-white/20 bg-surface-container-lowest text-primary-container focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer">
+              <span class="text-xs font-mono text-on-surface font-medium">Force Refresh</span>
+            </label>
+            <span class="text-[10.5px] font-mono px-2.5 py-1 rounded-full bg-surface-container-low text-on-surface-variant border border-white/[0.06] flex items-center gap-1.5" title="Bypasses and clears SQLite domain cache">
+              <span class="material-symbols-outlined text-xs text-primary-container">cached</span>
+              Bypass Disk Cache
+            </span>
+          </div>
+
+          <!-- Execution Action Buttons -->
+          <div class="grid grid-cols-4 gap-3 pt-1">
+            <button id="btnRunPipeline" onclick="triggerRunPipeline()" class="col-span-3 py-3 px-5 rounded-xl text-sm font-mono text-surface-container-lowest bg-primary-container hover:bg-white hover:shadow-[0_0_24px_rgba(0,242,254,0.5)] active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2.5 font-bold tracking-tight shadow-lg">
+              <span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+              <span>Run Pipeline</span>
+              <span class="ml-1 text-xs px-2 py-0.5 rounded-full bg-surface-container-lowest/20 font-normal">⌘↵</span>
+            </button>
+            <button onclick="resetForm()" class="py-3 px-3 rounded-xl bg-surface-container hover:bg-white/[0.08] text-on-surface-variant hover:text-on-surface border border-white/[0.09] flex items-center justify-center transition-colors active:scale-[0.98]" title="Reset Form Values">
+              <span class="material-symbols-outlined text-xl">restart_alt</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT COLUMN: FLUID PIPELINE MONITOR & OUTPUT RESULTS -->
+    <section class="lg:col-span-8 xl:col-span-8 flex flex-col gap-6">
+
+      <!-- 1. Live Telemetry Strip -->
+      <div class="glass-card rounded-2xl p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 shadow-xl">
+        <div class="flex flex-wrap items-center gap-2.5">
+          <!-- Detection Path Pill -->
+          <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container-lowest border border-tertiary-container/30 shadow-inner">
+            <span class="material-symbols-outlined text-tertiary-container text-sm">route</span>
+            <span class="text-xs text-on-surface-variant font-mono">Path:</span>
+            <span id="telemetryPathText" class="text-xs text-tertiary-fixed font-semibold font-mono">STANDBY</span>
+          </div>
+
+          <!-- Tokens Usage Pill -->
+          <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container-lowest border border-secondary/30 shadow-inner">
+            <span class="material-symbols-outlined text-secondary text-sm">psychology</span>
+            <span class="text-xs text-on-surface-variant font-mono">Tokens:</span>
+            <span id="telemetryTokensText" class="text-xs text-secondary font-semibold font-mono">0 tokens</span>
+          </div>
+
+          <!-- Status Indicator Pill -->
+          <div id="telemetryStatusPill" class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container border border-white/10">
+            <span id="telemetryStatusIcon" class="material-symbols-outlined text-on-surface-variant text-sm">radio_button_unchecked</span>
+            <span id="telemetryStatusText" class="text-xs text-on-surface-variant font-semibold font-mono">Ready</span>
+          </div>
+        </div>
+
+        <!-- Confidence Gauge & Duration -->
+        <div class="flex items-center gap-6">
+          <div class="flex items-center gap-3">
+            <div class="text-right">
+              <div class="text-[10px] font-mono text-on-surface-variant">CONFIDENCE</div>
+              <div id="telemetryPrecisionText" class="text-xs font-mono text-primary-container font-bold">0.0%</div>
+            </div>
+            <div class="w-16 h-2 rounded-full bg-surface-container-lowest overflow-hidden border border-white/10">
+              <div id="telemetryPrecisionBar" class="h-full bg-primary-container rounded-full shadow-[0_0_10px_rgba(0,242,254,0.8)] transition-all duration-300" style="width: 0%;"></div>
+            </div>
+          </div>
+          <div class="h-7 w-px bg-white/10"></div>
+          <div>
+            <div class="text-[10px] font-mono text-on-surface-variant">RUNTIME</div>
+            <div id="telemetryRuntimeText" class="text-xs font-mono text-tertiary-container font-bold flex items-center gap-1">0.00s</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Pipeline Execution Steps Matrix (13 Steps) -->
+      <div class="glass-card rounded-2xl p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex items-center gap-2.5">
+            <span class="material-symbols-outlined text-primary-container text-lg">account_tree</span>
+            <h3 class="text-xs font-mono text-on-surface tracking-wider font-semibold">AUTOMATED PIPELINE EXECUTION (13 STEPS)</h3>
+          </div>
+          <div class="flex items-center gap-3 text-xs font-mono text-on-surface-variant">
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-tertiary-container"></span>Passed</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary-container"></span>Running</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-white/20"></span>Pending</span>
+          </div>
+        </div>
+
+        <!-- 13 Steps Grid -->
+        <div id="stepMatrixGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7 gap-2.5 pb-1">
+          <!-- Dynamically populated by renderStepMatrix() -->
+        </div>
+      </div>
+
+      <!-- 3. Dual View Results & Tab Pane -->
+      <div class="glass-card rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+        <!-- Tab Bar -->
+        <div class="flex items-center justify-between px-5 pt-3 border-b border-white/[0.08] bg-surface-container-lowest/70">
+          <div class="flex items-center gap-1">
+            <button id="tabBtn_config" onclick="switchResultTab('config')" class="px-4 py-2.5 border-b-2 border-primary-container text-primary-container font-medium text-xs font-mono flex items-center gap-2">
+              <span class="material-symbols-outlined text-base">code</span>
+              <span>Generated Config</span>
+            </button>
+            <button id="tabBtn_jobs" onclick="switchResultTab('jobs')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors">
+              <span class="material-symbols-outlined text-base">table_view</span>
+              <span>Extracted Jobs <span id="extractedJobsTabCount">(0)</span></span>
+            </button>
+            <button id="tabBtn_batch_table" onclick="switchResultTab('batch_table')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors hidden">
+              <span class="material-symbols-outlined text-base">view_list</span>
+              <span>Batch Results</span>
+            </button>
+            <button id="tabBtn_logs" onclick="switchResultTab('logs')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors">
+              <span class="material-symbols-outlined text-base">terminal</span>
+              <span>Execution Logs</span>
+            </button>
+          </div>
+
+          <!-- Header Action Buttons -->
+          <div class="flex items-center gap-2.5 pb-2">
+            <!-- Single Job: Copy Config Button -->
+            <button id="btnCopyConfigTop" onclick="copyGeneratedConfig()" class="px-3 py-1.5 rounded-xl bg-surface-container hover:bg-white/[0.08] text-primary text-xs font-mono border border-white/[0.1] flex items-center gap-1.5 transition-all active:scale-95">
+              <span class="material-symbols-outlined text-sm">content_copy</span>
+              <span id="configCopyLabel">Copy Config</span>
+            </button>
+
+            <!-- Batch: Download Buttons -->
+            <button id="btnDownloadBatchCsv" onclick="downloadResultsCsv()" class="px-3.5 py-1.5 rounded-xl bg-tertiary-container/20 hover:bg-tertiary-container/30 text-tertiary-fixed text-xs font-mono font-medium border border-tertiary-container/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-sm hidden">
+              <span class="material-symbols-outlined text-sm">download</span>
+              <span>Download output_results.csv</span>
+            </button>
+            <button id="btnDownloadReplayJson" onclick="downloadReplayLog()" class="px-3.5 py-1.5 rounded-xl bg-secondary-container/20 hover:bg-secondary-container/30 text-secondary text-xs font-mono font-medium border border-secondary/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-sm hidden">
+              <span class="material-symbols-outlined text-sm">data_object</span>
+              <span>Replay JSON</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- TAB 1: CODE CONFIG VIEWER -->
+        <div id="tabPane_config" class="p-0">
+          <div id="configViewerContent" class="bg-[#070b12] font-mono text-xs overflow-x-auto p-5 leading-relaxed min-h-[300px]">
+            <div class="p-8 text-center text-on-surface-variant font-mono">
+              Fill the single job form and click "Run Pipeline" to generate configuration.
+            </div>
+          </div>
+        </div>
+
+        <!-- TAB 2: EXTRACTED JOBS TABLE -->
+        <div id="tabPane_jobs" class="p-0 hidden overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="bg-surface-container-lowest/90 border-b border-white/[0.08] text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant">
+                <th class="py-3.5 px-5">STATUS</th>
+                <th class="py-3.5 px-5">JOB TITLE</th>
+                <th class="py-3.5 px-5">JOB ID</th>
+                <th class="py-3.5 px-5">LOCATION</th>
+                <th class="py-3.5 px-5 text-right">ACTION</th>
+              </tr>
+            </thead>
+            <tbody id="extractedJobsTableBody" class="divide-y divide-white/[0.05] text-xs font-mono">
+              <tr>
+                <td colspan="5" class="py-8 text-center text-on-surface-variant">
+                  No extracted job records available.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="p-4 bg-surface-container-lowest/90 border-t border-white/[0.08] flex items-center justify-between text-xs font-mono text-on-surface-variant">
+            <span id="extractedJobsTotalCount">Showing 0 extracted jobs</span>
+          </div>
+        </div>
+
+        <!-- TAB 3: BATCH PROGRESS & RESULTS TABLE -->
+        <div id="tabPane_batch_table" class="p-5 hidden space-y-4">
+          <!-- Batch Progress Bar Section -->
+          <div id="batchProgressSection" class="p-4 rounded-xl bg-surface-container-lowest border border-white/[0.08] space-y-2 hidden">
+            <div class="flex items-center justify-between text-xs font-mono">
+              <span id="batchProgressCountText" class="text-on-surface font-medium">0 of 0 Processed</span>
+              <span id="batchProgressPercentText" class="text-primary-container font-bold">0%</span>
+            </div>
+            <div class="w-full h-2 rounded-full bg-surface-container overflow-hidden border border-white/10">
+              <div id="batchProgressBar" class="h-full bg-primary-container rounded-full transition-all duration-300" style="width: 0%;"></div>
+            </div>
+          </div>
+
+          <!-- Batch Results Table -->
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-surface-container-lowest/90 border-b border-white/[0.08] text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant">
+                  <th class="py-3 px-4">CRAWLER ID</th>
+                  <th class="py-3 px-4">COMPANY</th>
+                  <th class="py-3 px-4">STATUS</th>
+                  <th class="py-3 px-4">SUB-TECH COMMENT</th>
+                  <th class="py-3 px-4">CONFIG TYPE</th>
+                  <th class="py-3 px-4">PRECISION</th>
+                </tr>
+              </thead>
+              <tbody id="batchResultsTableBody" class="divide-y divide-white/[0.05] text-xs font-mono">
+                <!-- Dynamically populated during batch runs -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB 4: EXECUTION LOGS TERMINAL -->
+        <div id="tabPane_logs" class="p-0 hidden">
+          <div id="logsTerminalContent" class="p-5 font-mono text-xs space-y-2 max-h-[480px] overflow-y-auto bg-[#070b12] text-on-surface leading-relaxed">
+            <div class="text-on-surface-variant/60">[READY] Waiting for execution trigger...</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast Container -->
+  <div id="toastContainer"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

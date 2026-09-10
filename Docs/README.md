@@ -56,11 +56,19 @@
    - [Browser Session Management (`src/browser_manager.py`)](#browser-session-management-srcbrowser_managerpy)
    - [SQLite Caching Architecture (`config_cache.db`)](#sqlite-caching-architecture-config_cachedb)
    - [Telemetry & Audit Logging (`pipeline.db`)](#telemetry--audit-logging-pipelinedb)
-8. [Directory & File Organization](#8-directory--file-organization)
-9. [AI Agent Cheatsheet: Traps, Invariants & Troubleshooting](#9-ai-agent-cheatsheet-traps-invariants--troubleshooting)
-10. [Developer & TechOps Guide](#10-developer--techops-guide)
+8. [TechOps Telemetry Console & Web Dashboard](#8-techops-telemetry-console--web-dashboard)
+   - [Unified WebSocket Streaming Architecture](#unified-websocket-streaming-architecture)
+   - [Single Job Interactive Mode](#single-job-interactive-mode)
+   - [Batch CSV Ingestion & Streaming Progress](#batch-csv-ingestion--streaming-progress)
+   - [Real-Time 13-Step Pipeline Matrix](#real-time-13-step-pipeline-matrix)
+   - [AST Config Viewer & 1-Click Copy](#ast-config-viewer--1-click-copy)
+9. [Directory & File Organization](#9-directory--file-organization)
+10. [AI Agent Cheatsheet: Traps, Invariants & Troubleshooting](#10-ai-agent-cheatsheet-traps-invariants--troubleshooting)
+11. [Developer & TechOps Guide](#11-developer--techops-guide)
+    - [One-Command Quickstart (`web_app.py`)](#one-command-quickstart-webapppy)
     - [Environment Setup & Installation](#environment-setup--installation)
     - [Running Targeted Batches & CLI](#running-targeted-batches--cli)
+    - [Offline Benchmark Evaluation (`evaluation/evaluate.py`)](#offline-benchmark-evaluation-evaluationevaluatepy)
     - [Test Suite & Quality Verification](#test-suite--quality-verification)
 
 ---
@@ -729,8 +737,63 @@ Provides seamless, zero-downtime LLM invocations with automatic provider fallbac
 ```
 config/
 ├── .env                                # Environment variables & API credentials
-├── requirements.txt                    # Project dependencies
-├── pipeline.db                         # Telemetry and run execution database
+## 8. TechOps Telemetry Console & Web Dashboard
+
+AI-Config-Engine includes a real-time, glassmorphic **TechOps Telemetry Console** built for sub-second visual feedback, streaming pipeline execution, and batch processing.
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        TECHOPS TELEMETRY CONSOLE ARCHITECTURE                          │
+├────────────────────────┬───────────────────────────────────────────────────────────────┤
+│ [Frontend Client]      │ [FastAPI & WebSocket Server] (web_app.py / src/web/)          │
+│                        │                                                               │
+│ • Dual-Mode Switcher   │ • ObservableStep Decorators intercept all 13 pipeline steps   │
+│   (Single Job / Batch) │ • WebSocket Broadcast (/ws/pipeline)                          │
+│ • 13-Step Status Grid  │ • Step-by-step latency tracking via time.perf_counter()        │
+│ • Live Execution Logs  │ • Mathematical Token & Confidence Meters                      │
+│ • AST JSON Viewer      │ • Force Refresh Cache Bypass Engine                           │
+│ • 1-Click Copy Icon    │ • Multi-format Exports (output_results.csv, replay_log.json)   │
+└────────────────────────┴───────────────────────────────────────────────────────────────┘
+```
+
+### Unified WebSocket Streaming Architecture
+* **Bi-directional Connection:** The web client connects to `/ws/pipeline` with automated 15-second heartbeat ping-pongs and auto-reconnect logic.
+* **Observable Pipeline Events:**
+  - `pipeline_start`: Initializes timer and resets the 13-step matrix.
+  - `step_start`: Emits active running stage text (e.g. `Checking robots.txt...`, `Generating PCRE regex...`) and activates cyan glowing pulse.
+  - `step_finish`: Derives badge, status (`done`, `skipped`, `failed`), and exact millisecond duration (e.g. `Robots.txt allowed · 14ms`, `Generated regex (95%) · 120ms`).
+  - `log`: Streams real-time Python log records with severity tags.
+  - `pipeline_complete`: Broadcasts compiled JSON AST, extracted job list, token count, and precision metrics.
+
+### Single Job Interactive Mode
+Allows TechOps engineers to test and generate configs for individual career portals:
+* **Form Inputs:** `Crawler ID`, `Company Name`, `Site ID`, `Career Site URL`, `Expected Jobs`, and optional `Integration Link`.
+* **Keyboard Shortcut:** `⌘ + Enter` / `Ctrl + Enter` to immediately launch execution.
+* **Force Refresh Checkbox:** When checked, bypasses and purges SQLite domain cache for fresh discovery.
+* **AST Config Viewer:** Formats syntax-highlighted JSON with top-right 1-click clipboard copy.
+
+### Batch CSV Ingestion & Streaming Progress
+For mass evaluation across hundreds of career portals:
+* **Drag-and-Drop Dropzone:** Ingests target CSV files (`crawlerId, companyName, siteId, careerSiteUrl`).
+* **Real-Time Progress:** Shows live completion percentage, passed/failed counters, and streaming row execution logs.
+* **1-Click Export:** Download `output_results.csv` and `replay_log.json` directly from the dashboard upon batch completion.
+
+---
+
+## 9. Directory & File Organization
+
+```text
+.
+├── .env                                # Local secrets & API gateway keys (git-ignored)
+├── .env.example                        # Template environment variables for setup
+├── .gitignore                          # Git exclusions (venv, env, logs, caches)
+├── requirements.txt                    # Python project dependencies
+├── web_app.py                          # Unified launcher (Frontend + WebSocket Server)
+│
+├── frontend/                           # TechOps Telemetry Console (Vanilla HTML5/CSS3/ES6)
+│   ├── index.html                      # Glassmorphic control center & step matrix
+│   ├── style.css                       # Custom design system tokens & animations
+│   └── app.js                          # WebSocket streaming client & AST renderer
 │
 ├── Docs/                               # System documentation & technical SOPs
 │   ├── README.md                       # Master architecture documentation (this file)
@@ -743,7 +806,8 @@ config/
 │   ├── parent_rules.json               # Registry of active JPERL parent rule names
 │   ├── job_keywords.json               # Multilingual job title & classification tokens
 │   ├── jd_signals.json                 # Heuristic indicators for JD description blocks
-│   └── config_cache.db                 # SQLite configuration cache
+│   ├── config_cache.db                 # SQLite configuration cache
+│   └── pipeline.db                     # Telemetry and run execution audit database
 │
 ├── src/                                # Core pipeline source code
 │   ├── main.py                         # ConfigGenerator orchestrator & CLI entry point
@@ -752,7 +816,7 @@ config/
 │   ├── pipeline_step.py                # Abstract PipelineStep and PipelineState models
 │   ├── llm_client.py                   # Multi-provider LLM gateway & token tracker
 │   ├── compiler.py                     # Universal JPERL & XPath compiler
-│   ├── compile_step.py                 # Pipeline step: Compiler router
+│   ├── compile_step.py                 # Pipeline step 13: Compiler router
 │   ├── robot_checker.py                # Pipeline step 1: Robot-protection checker
 │   ├── ats_fingerprinter.py            # Pipeline step 2: ATS signature detector
 │   ├── config_cache.py                 # Pipeline step 3: SQLite cache check & save
@@ -774,6 +838,10 @@ config/
 │   ├── sitemap_crawler.py              # XML sitemap crawler for discovery
 │   └── run_logger.py                   # Formatted console & file logger
 │
+├── src/web/                            # Web & WebSocket backend subsystem
+│   ├── server.py                       # FastAPI application & REST/WebSocket routes
+│   └── pipeline_runner.py              # ObservableStep pipeline execution wrapper
+│
 ├── src/extraction/                     # Replay & parsing subsystem
 │   ├── replay_engine.py                # Unified execution gateway
 │   ├── json_parser.py                  # JPERL LOCJSON/JDJSON path evaluator
@@ -781,21 +849,24 @@ config/
 │   ├── xpath_parser.py                 # lxml XPath DOM query evaluator
 │   └── candidate_replayer.py           # Deterministic candidate payload inspector
 │
+├── evaluation/                         # Offline accuracy evaluation framework
+│   ├── known_sites.py                  # Ground-truth benchmark career portals
+│   └── evaluate.py                     # Accuracy and benchmark scoring script
+│
 ├── Testing/                            # Batch testing & evaluation scripts
 │   ├── input/
 │   │   └── input_records.csv           # Benchmark dataset of corporate career sites
 │   ├── output/
 │   │   ├── output_results.csv          # Generated configs, statuses, and comments
 │   │   └── replay_log.json             # Live extracted job records & replay logs
-│   ├── run_targeted.py                 # Targeted batch execution script
-│   └── evaluate.py                     # Accuracy and benchmark scoring script
+│   └── run_targeted.py                 # Targeted batch execution script
 │
 └── tests/                              # Automated pytest test suite (120+ unit tests)
 ```
 
 ---
 
-## 9. AI Agent Cheatsheet: Traps, Invariants & Troubleshooting
+## 10. AI Agent Cheatsheet: Traps, Invariants & Troubleshooting
 
 When modifying or debugging this codebase, keep these 6 architectural invariants in mind:
 
@@ -821,11 +892,23 @@ conn.cursor().execute("DELETE FROM config_cache WHERE domain LIKE '%targetdomain
 conn.commit()
 conn.close()
 ```
-`Testing/run_targeted.py` automatically clears the cache for target IDs before execution.
+The dashboard's `[Force Refresh]` checkbox and `Testing/run_targeted.py` automatically clear the cache for target domains before execution.
 
 ---
 
-## 10. Developer & TechOps Guide
+## 11. Developer & TechOps Guide
+
+### One-Command Quickstart (`web_app.py`)
+
+Launch both the **FastAPI backend** and the **TechOps Telemetry Console frontend** simultaneously with a single command:
+
+```powershell
+uv run python web_app.py
+```
+* **Dashboard URL:** Open [http://127.0.0.1:8000](http://127.0.0.1:8000) or [http://localhost:8000](http://localhost:8000) in your browser.
+* **WebSocket Endpoint:** `ws://127.0.0.1:8000/ws/pipeline`
+
+---
 
 ### Environment Setup & Installation
 
@@ -849,9 +932,12 @@ conn.close()
    LLM_PROVIDER=naukri
 
    # Naukri Gen-AI Gateway
-   NAUKRI_API_URL=https://genai-gateway.naukri.com/v1/chat/completions
-   NAUKRI_TOKEN=your_naukri_token
+   NAUKRI_API_URL=https://dashboard.naukri.com/gen-ai/prompt/chat
+   NAUKRI_TOKEN="Bearer your_jwt_token_here"
    NAUKRI_MODEL=gpt-5.6-luna
+   NAUKRI_APP_ID=123
+   NAUKRI_SYSTEM_ID=123
+   NAUKRI_EMAIL=user@infoedge.com
 
    # Google Gemini (supports comma-separated rotation)
    GEMINI_API_KEY=key_1,key_2,key_3
@@ -861,6 +947,8 @@ conn.close()
    GROQ_API_KEY=your_groq_key
    GROQ_MODEL=llama-3.3-70b-versatile
    ```
+
+---
 
 ### Running Targeted Batches & CLI
 
@@ -879,9 +967,12 @@ uv run python src/main.py `
 uv run python Testing/run_targeted.py 1841670 1892950 1894660 1961480 1963128 1970402 2360662 3219856 3499948 3501190
 ```
 
-#### 3. Inspect Live Extraction Results:
-* **Generated Configs:** [`Testing/output/output_results.csv`](file:///c:/Users/nipun.kumar/Projects/config/Testing/output/output_results.csv)
-* **Replayed Extracted Jobs:** [`Testing/output/replay_log.json`](file:///c:/Users/nipun.kumar/Projects/config/Testing/output/replay_log.json)
+#### 3. Offline Benchmark Evaluation:
+```powershell
+uv run python evaluation/evaluate.py
+```
+
+---
 
 ### Test Suite & Quality Verification
 
@@ -890,3 +981,4 @@ Run the full automated test suite covering unit tests, compiler checks, and pars
 uv run pytest tests/ -v
 ```
 *(Benchmark: **117 passed, 3 skipped** across 120 tests with 0 regressions).*
+

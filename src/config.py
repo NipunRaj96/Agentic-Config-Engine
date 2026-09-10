@@ -4,6 +4,11 @@ Central configuration and constants.
 """
 
 import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── Internal Infrastructure ────────────────────────────────────────────────────
 ROBOT_CHECKER_URL: str = os.environ.get("ROBOT_CHECKER_URL", "")

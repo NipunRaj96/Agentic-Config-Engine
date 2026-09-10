@@ -1,43 +1,56 @@
 """
-evaluate.py
-───────────
+evaluation/evaluate.py
+──────────────────────
 Offline accuracy evaluation framework for the JPERL Configuration Generator.
 Runs actual LLM calls on cached candidate traffic responses to measure extraction quality.
 """
 
-import sys
-import os
 import json
 import logging
+import os
+import sys
 import unittest
 import unittest.mock
 from typing import Any
 
-# Load .env from project root
-_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _root)
+# Ensure project root is in sys.path and load .env
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_root = os.path.dirname(_current_dir) if os.path.basename(_current_dir) == "evaluation" else _current_dir
+if _root not in sys.path:
+    sys.path.insert(0, _root)
+
 _env_path = os.path.join(_root, ".env")
 if os.path.exists(_env_path):
-    with open(_env_path) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _key, _, _val = _line.partition("=")
-                val_str = _val.strip()
-                if val_str.startswith('"') and val_str.endswith('"'):
-                    val_str = val_str[1:-1]
-                elif val_str.startswith("'") and val_str.endswith("'"):
-                    val_str = val_str[1:-1]
-                os.environ[_key.strip()] = val_str
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        with open(_env_path, encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _key, _, _val = _line.partition("=")
+                    val_str = _val.strip()
+                    if val_str.startswith('"') and val_str.endswith('"'):
+                        val_str = val_str[1:-1]
+                    elif val_str.startswith("'") and val_str.endswith("'"):
+                        val_str = val_str[1:-1]
+                    os.environ[_key.strip()] = val_str
 
 # Disable noise logging during evaluation
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger("src.llm_reasoner").setLevel(logging.INFO)
 
-from src.llm_reasoner import LLMReasoner
-from src.models import GeneratorInput, CapturedRequest, RankedCandidate, GeneratorOutput
-from src.pipeline_step import PipelineState
 from evaluation.known_sites import TEST_SITES
+from src.llm_reasoner import LLMReasoner
+from src.models import (
+    CapturedRequest,
+    GeneratorInput,
+    GeneratorOutput,
+    RankedCandidate,
+)
+from src.pipeline_step import PipelineState
+
 
 def run_evaluation():
     print("=" * 60)
@@ -305,6 +318,7 @@ def run_evaluation():
     print("-" * 60)
     print(f"Overall Accuracy  : {overall_acc:.0f}%")
     print("=" * 60)
+
 
 if __name__ == "__main__":
     run_evaluation()
