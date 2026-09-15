@@ -339,6 +339,21 @@
 
         <!-- TAB 1: CODE CONFIG VIEWER -->
         <div id="tabPane_config" class="p-0">
+          <!-- Dual Config Route Selector (when both XPath and JPERL LOCRGX are synthesized) -->
+          <div id="dualConfigToolbar" class="px-5 py-2.5 bg-surface-container-low/60 border-b border-white/[0.06] flex items-center justify-between gap-3 hidden">
+            <div class="flex items-center gap-2">
+              <span class="text-[10.5px] font-mono text-on-surface-variant font-semibold">SYNTHESIZED FORMATS:</span>
+              <div class="inline-flex rounded-lg bg-surface-container-lowest p-0.5 border border-white/[0.08]">
+                <button id="btnSelectConfig_xpath" onclick="selectConfigDisplay('xpath')" class="px-2.5 py-1 rounded-md text-[11px] font-mono text-primary font-medium bg-primary-container/20 border border-primary-container/30 transition-all">Primary: XPath (SRP)</button>
+                <button id="btnSelectConfig_jperl" onclick="selectConfigDisplay('jperl')" class="px-2.5 py-1 rounded-md text-[11px] font-mono text-on-surface-variant hover:text-on-surface transition-all">Alternative: JPERL (LOCRGX)</button>
+              </div>
+            </div>
+            <span class="text-[10px] font-mono text-tertiary-fixed flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-tertiary-container"></span>
+              Dual-Route Synthesis Active
+            </span>
+          </div>
+
           <div id="configViewerContent" class="bg-[#070b12] font-mono text-xs overflow-x-auto p-5 leading-relaxed min-h-[300px]">
             <div class="p-8 text-center text-on-surface-variant font-mono">
               Fill the single job form and click "Run Pipeline" to generate configuration.

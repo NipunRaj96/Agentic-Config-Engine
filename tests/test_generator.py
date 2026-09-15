@@ -478,14 +478,14 @@ class TestPipelineIntegration:
 
 class TestLOCRGXGenerator:
     _SAMPLE_HTML = (
-        '<div class="job-item"><a href="/jobs/123">Software Engineer</a>'
+        '<div class="job-item"><span class="title">Software Engineer</span>'
         '<span class="location">Bangalore</span></div>'
-        '<div class="job-item"><a href="/jobs/456">DevOps</a>'
+        '<div class="job-item"><span class="title">DevOps</span>'
         '<span class="location">Remote</span></div>'
     )
     _VALID_REGEX_RESPONSE = json.dumps({
-        "locrgx": r'(?s)<div class="job-item"><a href="([^"]+)">([^<]+)</a><span class="location">([^<]+)</span>',
-        "locrgxseq": "JOBLINK,JOBTITLE,LOCATION",
+        "locrgx": r'(?s)<div class="job-item"><span class="title">([^<]+)</span><span class="location">([^<]+)</span>',
+        "locrgxseq": "JOBTITLE,LOCATION",
         "move_to_jd": 0,
         "jdrgx": None,
         "jdrgxseq": None,
@@ -650,7 +650,7 @@ class TestLOCRGXGenerator:
         from src.locrgx_generator import LOCRGXGenerator
         mock_llm = MagicMock()
         mismatched_response = json.dumps({
-            "locrgx": r'(?s)<div class="job-item"><a href="[^"]+">([^<]+)</a>',
+            "locrgx": r'(?s)<div class="job-item"><span class="title">([^<]+)</span>',
             "locrgxseq": "JOBID,JOBTITLE",
             "move_to_jd": 0,
             "max_pages": "1",
@@ -662,6 +662,49 @@ class TestLOCRGXGenerator:
         result = gen.execute(_make_input(jobs_on_career_page=2), state)
         assert result.signal == StepSignal.HALT_OK
         assert "(([^<]+))" in state.locrgx_result.locrgx
+
+    def test_missing_jobdesc_with_distinct_detail_link_triggers_move_to_jd_retry(self):
+        from src.locrgx_generator import LOCRGXGenerator
+        html_with_detail_links = (
+            '<div class="job-item"><a href="/careers/relationship-manager/">Relationship Manager</a><span class="loc">Jaipur</span></div>'
+            '<div class="job-item"><a href="/careers/collection-executive/">Collection Executive</a><span class="loc">Jaipur</span></div>'
+        )
+        # Attempt 1: LLM mistakenly outputs move_to_jd: 0 and omits JOBDESC
+        bad_response = json.dumps({
+            "locrgx": r'(?s)<div class="job-item"><a href="([^"]+)">([^<]+)</a><span class="loc">([^<]+)</span>',
+            "locrgxseq": "JOBLINK,JOBTITLE,LOCATION",
+            "move_to_jd": 0,
+            "max_pages": "1",
+            "confidence": 0.9,
+        })
+        # Attempt 2: Self-healing retry corrects to move_to_jd: 1
+        good_response = json.dumps({
+            "locrgx": r'(?s)<div class="job-item"><a href="([^"]+)">([^<]+)</a><span class="loc">([^<]+)</span>',
+            "locrgxseq": "JOBLINK,JOBTITLE,LOCATION",
+            "move_to_jd": 1,
+            "max_pages": "1",
+            "confidence": 0.9,
+        })
+        from unittest.mock import patch, MagicMock
+        mock_llm = MagicMock()
+        mock_llm.call.side_effect = [bad_response, good_response]
+        gen = LOCRGXGenerator(llm_client=mock_llm)
+        state = self._make_state(html=html_with_detail_links)
+        with patch.object(gen, "_extract_sample_job_urls", return_value=["https://121finance.com/careers/relationship-manager/"]):
+            with patch("src.locrgx_generator.JDExtractor") as MockJDExtractor:
+                mock_jd_inst = MockJDExtractor.return_value
+                from src.jd_extractor import JDExtractionResult
+                mock_jd_inst.extract.return_value = JDExtractionResult(
+                    strategy="JDRGX",
+                    jdrgx_patterns=[{"pattern": r'(?s)Job Description(.+?)Apply', "seq": "JOBDESC"}]
+                )
+                result = gen.execute(_make_input(jobs_on_career_page=2), state)
+                assert result.signal == StepSignal.HALT_OK
+                assert state.locrgx_result.move_to_jd == 1
+                assert state.locrgx_result.jdrgx == r'(?s)Job Description(.+?)Apply'
+                assert mock_llm.call.call_count == 2
+                assert "Captured JOBDESC is incomplete or missing from listing while separate job detail links exist" in state.failed_static_attempts[0]["error"]
+
 
 
 # ════════════════════════════════════════════════════════════════════════════════

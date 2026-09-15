@@ -288,14 +288,33 @@ function setStepState(stepId, status, descText = null, durationMs = null) {
 
 // ── Single Pipeline Result Handler ───────────────────────────────────────────
 function handleSinglePipelineResult(res) {
+  AppState.latestResult = res;
   AppState.latestConfig = res.config;
+  AppState.latestJperlConfig = res.jperl_config;
+  AppState.latestXpathConfig = res.xpath_config;
   AppState.extractedJobs = res.extracted_jobs || [];
+
+  // Dual config toolbar visibility
+  const dualToolbar = document.getElementById('dualConfigToolbar');
+  const hasBoth = res.has_both || (res.jperl_config && res.xpath_config);
+  if (dualToolbar) {
+    if (hasBoth) {
+      dualToolbar.classList.remove('hidden');
+      selectConfigDisplay(res.primary_config_type || 'xpath');
+    } else {
+      dualToolbar.classList.add('hidden');
+    }
+  }
 
   // 1. Update Telemetry Strip
   const pathElem = document.getElementById('telemetryPathText');
   if (pathElem) {
-    const path = res.primary_config_type ? res.primary_config_type.toUpperCase() : (res.site_type || 'JPERL');
-    pathElem.innerText = `${path} ${res.crawler_type || ''}`.trim();
+    if (hasBoth) {
+      pathElem.innerText = 'XPATH (SRP) + JPERL (LOCRGX)';
+    } else {
+      const path = res.primary_config_type ? res.primary_config_type.toUpperCase() : (res.site_type || 'JPERL');
+      pathElem.innerText = `${path} ${res.crawler_type || ''}`.trim();
+    }
   }
 
   const tokenElem = document.getElementById('telemetryTokensText');
@@ -311,7 +330,7 @@ function handleSinglePipelineResult(res) {
   updateStatusPill(res.tech_status, res.sub_tech_comment || res.tech_status, res.tech_status === 'Done' ? 'tertiary' : 'error');
 
   // 2. Render JSON Config AST Viewer
-  renderConfigJson(res.config);
+  renderConfigJson(AppState.latestConfig);
 
   // 3. Render Extracted Jobs Table
   renderExtractedJobs(res.extracted_jobs);
@@ -323,6 +342,24 @@ function handleSinglePipelineResult(res) {
     showToast(`Configuration successfully synthesized! Confidence: ${res.confidence_percent}`, 'success');
   } else {
     showToast(`Pipeline terminated: ${res.tech_status} (${res.tech_comments || 'Review logs'})`, 'error');
+  }
+}
+
+function selectConfigDisplay(type) {
+  AppState.selectedConfigType = type;
+  const btnXpath = document.getElementById('btnSelectConfig_xpath');
+  const btnJperl = document.getElementById('btnSelectConfig_jperl');
+
+  if (type === 'xpath') {
+    if (btnXpath) btnXpath.className = 'px-2.5 py-1 rounded-md text-[11px] font-mono text-primary font-medium bg-primary-container/20 border border-primary-container/30 transition-all';
+    if (btnJperl) btnJperl.className = 'px-2.5 py-1 rounded-md text-[11px] font-mono text-on-surface-variant hover:text-on-surface transition-all';
+    AppState.latestConfig = AppState.latestXpathConfig || AppState.latestResult?.config;
+    renderConfigJson(AppState.latestConfig);
+  } else if (type === 'jperl') {
+    if (btnJperl) btnJperl.className = 'px-2.5 py-1 rounded-md text-[11px] font-mono text-primary font-medium bg-primary-container/20 border border-primary-container/30 transition-all';
+    if (btnXpath) btnXpath.className = 'px-2.5 py-1 rounded-md text-[11px] font-mono text-on-surface-variant hover:text-on-surface transition-all';
+    AppState.latestConfig = AppState.latestJperlConfig || AppState.latestResult?.config;
+    renderConfigJson(AppState.latestConfig);
   }
 }
 

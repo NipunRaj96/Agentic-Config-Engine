@@ -1,8 +1,32 @@
+# Python & Virtual Environments
 .venv/
 .vscode/
-.env
-.agents/
 .pytest_cache/
 __pycache__/
 *.pyc
 logs/
+.agents/
+
+# Secrets & Local Environment
+.env
+.env.local
+.env.*
+!.env.example
+
+# Internal Company Data & Databases
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+*.sqlite3
+
+# Test data & runtime outputs
+Testing/input/
+Testing/output/
+knowledge_base/*.db
+
+# Internal SOPs and Binary Docs
+Docs/*.pdf
+Docs/*.odt
+Docs/Parent_Rule_Details*

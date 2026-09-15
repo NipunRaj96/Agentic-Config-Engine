@@ -139,10 +139,10 @@ MOVE_TO_JD: 1
 JDRGX1: (?s)class="rtltextaligneligible">(.+?)Apply now
 JDRGXSEQ1: JOBDESC
 
-EXAMPLE 3 — GET direct career page, MOVE_TO_JD=0 (description inline):
-Source URL: https://hellimoulds.com/careers/
-LOCRGX: (?s)<h2 class="elementor-heading-title elementor-size-default">([^<]+).*?Qualifications.*?<p class="elementor-image-box-description">([^<]+).*?Expe
-LOCRGXSEQ: JOBTITLE,EDUCATION
+EXAMPLE 3 — GET direct career page, MOVE_TO_JD=0 (full description inline in accordion/card):
+Source URL: https://extremewebworld.com/career-with-us.html
+LOCRGX: (?s)<div\s+class="accordion-item"[^>]*>\s*<h2[^>]*>\s*<button[^>]*>\s*(([^<]*?\S))\s*</button>\s*</h2>\s*<div[^>]*class="[^"]*accordion-collapse[^"]*"[^>]*>\s*<div[^>]*class="[^"]*accordion-body[^"]*"[^>]*>\s*(.*?)\s*</div>\s*</div>\s*</div>
+LOCRGXSEQ: JOBID,JOBTITLE,JOBDESC
 MOVE_TO_JD: 0
 
 EXAMPLE 4 — Zoho Recruit hosted site (embedded JSON in static HTML), MOVE_TO_JD=1:
@@ -157,6 +157,8 @@ You are a JPERL config engineer at Naukri. Your job is to write PCRE regex patte
 that extract job listings from static raw HTTP responses.
 
 {examples}
+
+Note: Few-shot examples are structural illustrations only. Do NOT copy patterns, field names, or move_to_jd values from examples. Always analyze the target HTML independently and determine move_to_jd from the actual page structure.
 
 NOW YOUR TASK:
 Career site URL: {career_url}
@@ -190,7 +192,8 @@ Rules:
   3. Never slice `EXPERIENCE` or `LOCATION` out of an unstructured job description or paragraph. If experience/location is mentioned within a paragraph or list of requirements, leave it inside `JOBDESC` (never split or truncate `JOBDESC`).
 - JOBLINK & MOVE_TO_JD Priority Rules:
   1. Priority 1 (JOBLINK): If job detail links/pages exist (or the site provides unique job link paths/IDs like Zoho Recruit), ALWAYS capture the link/id into JOBLINK and set `move_to_jd=1`.
-  2. If jobs are displayed statically on a single page with no individual detail links/pages (and no separate detail URLs exist), omit JOBLINK, capture visible fields, and set `move_to_jd=0`.
+  2. Priority 2: If the full job description is already fully visible inline on the listing page card/accordion, capture it into `JOBDESC` and set `move_to_jd=0`.
+  3. Priority 3: If jobs are displayed statically on a single page with no individual detail links/pages (and no separate detail URLs exist), omit JOBLINK, capture visible fields, and set `move_to_jd=0`.
 - max_pages: "1" if single page, "3" if pagination detected.
 - confidence: 0.9 if you can clearly see ≥2 repeating job elements; 0.5 if structure is unclear; 0.2 if guessing.
 - **Write robust and flexible regex patterns**:
@@ -220,16 +223,18 @@ HTML snippet (truncated):
 Rules:
 1. Fix the regular expression so that it matches every job listing in the HTML snippet.
 2. Ensure capture groups match the sequence given in locrgxseq.
-3. If job description is NOT visible in the listing HTML and individual job detail links/pages exist → set move_to_jd=1.
-4. If job description IS inline on the listing card or no separate job detail pages exist → set move_to_jd=0.
-5. If the HTML contains clean JSON data, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq".
-6. Ensure the pattern ends immediately at the URL/href quote (e.g. href="([^"]+)").
+3. MOVE_TO_JD decision:
+   - If individual job detail links/pages exist (e.g. href or job URL/ID) -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
+   - If full job description is inline in the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
+4. If the HTML contains clean JSON data, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq".
+5. Ensure the pattern ends immediately at the URL/href quote (e.g. href="([^"]+)").
+6. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
 
 Return ONLY valid JSON:
 {{
   "locrgx": "(?s)<PCRE pattern with capture groups>",
   "locrgxseq": "COMMA_SEPARATED_FIELDS",
-  "move_to_jd": 0,
+  "move_to_jd": 1,
   "max_pages": "1",
   "confidence": 0.90
 }}
@@ -251,14 +256,20 @@ Sequence: {failed_seq}
 Validation Result: match_count = {failed_matches}, error = {failed_error}
 
 DIAGNOSTIC INSTRUCTION:
-The previous regex failed validation. Do NOT blindly modify it. Inspect the raw HTTP HTML and determine exactly why the previous pattern produced incorrect/zero matches. Identify the actual job-list structure, encoding, delimiters, repeated boundaries, and fields present in the raw response. Generate a corrected regex based ONLY on the raw HTML.
+The previous regex failed validation. Do NOT blindly modify it or copy failed values. Inspect the raw HTTP HTML and determine exactly why the previous pattern produced incorrect/zero matches. Identify the actual job-list structure, encoding, delimiters, repeated boundaries, and fields present in the raw response. Generate a corrected regex based ONLY on the raw HTML.
 (If the raw HTML contains structured JSON better suited for LOCJSON, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq").
+
+DECISION RULES:
+1. Ensure capture groups match the sequence given in locrgxseq.
+2. If distinct job detail links/pages exist -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
+3. If full job description is inline on the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
+4. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
 
 Return ONLY a valid JSON object — no markdown, no prose, no explanation:
 {{
   "locrgx": "(?s)<regex pattern matching repeating job listings>",
   "locrgxseq": "COMMA_SEPARATED_FIELDS",
-  "move_to_jd": 0,
+  "move_to_jd": 1,
   "max_pages": "1",
   "confidence": 0.90
 }}
@@ -287,11 +298,17 @@ ADVANCED FORENSIC INSTRUCTION:
 The previous regex attempts failed. Treat them as failed hypotheses. Compare both previous patterns against the raw HTTP payload and determine why they failed. Do not repeat the same strategy. Re-analyze the raw HTML structure from first principles, including HTML entity encoding, escaped JSON, repeated job boundaries, attribute structure, and greedy/non-greedy behavior. Generate a new regex that can be validated directly against the raw HTTP response.
 (If the raw HTML contains structured JSON better suited for LOCJSON, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq").
 
+DECISION RULES:
+1. Ensure capture groups match the sequence given in locrgxseq.
+2. If distinct job detail links/pages exist -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
+3. If full job description is inline on the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
+4. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
+
 Now generate Attempt 3. Return ONLY a valid JSON object — no markdown, no prose, no explanation:
 {{
   "locrgx": "(?s)<regex pattern matching repeating job listings>",
   "locrgxseq": "COMMA_SEPARATED_FIELDS",
-  "move_to_jd": 0,
+  "move_to_jd": 1,
   "max_pages": "1",
   "confidence": 0.90
 }}
@@ -473,8 +490,8 @@ class LOCRGXGenerator(PipelineStep):
             if not is_jd_complete:
                 is_valid = False
                 err_msg = (
-                    "Captured JOBDESC text is incomplete or too short while separate job detail links exist. "
-                    "Set move_to_jd=1 and generate a JDRGX pattern instead."
+                    "Captured JOBDESC is incomplete or missing from listing while separate job detail links exist. "
+                    "Set move_to_jd=1 and capture JOBLINK in locrgxseq so full job descriptions can be extracted from detail pages."
                 )
             elif is_valid and result.move_to_jd == 1:
                 seq_fields = [f.strip() for f in (result.locjsonseq or result.locrgxseq or "").split(",") if f.strip()]
@@ -1007,45 +1024,46 @@ class LOCRGXGenerator(PipelineStep):
     def _check_jd_completeness(self, result: _LLMRegexOutput, matches: int, unescaped_html: str, career_url: str) -> bool:
         if matches == 0 or result.move_to_jd == 1:
             return True
-        if not result.locrgx:
-            return True
-        fields = [f.strip() for f in (result.locrgxseq or "").split(",") if f.strip()]
-        if "JOBDESC" not in fields:
-            return True
-            
-        jd_idx = fields.index("JOBDESC")
-        raw_matches = re.findall(re.compile(result.locrgx, re.DOTALL), unescaped_html)
-        if not raw_matches:
-            return True
-            
-        first = raw_matches[0]
+        seq = result.locjsonseq if result.locjson else (result.locrgxseq or "")
+        fields = [f.strip() for f in seq.split(",") if f.strip()]
+        
+        has_distinct_joblink = False
         captured_jd = None
-        if isinstance(first, tuple):
-            if jd_idx < len(first):
-                captured_jd = first[jd_idx]
-        elif jd_idx == 0:
-            captured_jd = first
+        
+        if result.locrgx:
+            raw_matches = re.findall(re.compile(result.locrgx, re.DOTALL), unescaped_html)
+            if not raw_matches:
+                return True
+            first = raw_matches[0]
             
-        if captured_jd is None or not self._is_jd_complete(captured_jd):
-            # Only classify as incomplete if we actually have a distinct detail link to fetch from
+            # Check JOBLINK
             if "JOBLINK" in fields:
                 jl_idx = fields.index("JOBLINK")
-                raw_link = None
-                if isinstance(first, tuple):
-                    if jl_idx < len(first):
-                        raw_link = first[jl_idx]
-                elif jl_idx == 0:
-                    raw_link = first
-                
+                raw_link = first[jl_idx] if isinstance(first, tuple) and jl_idx < len(first) else (first if jl_idx == 0 else None)
                 if raw_link:
-                    raw_link = raw_link.strip()
-                    if raw_link and not raw_link.startswith("#"):
+                    raw_link = str(raw_link).strip()
+                    if raw_link and not raw_link.startswith("#") and not raw_link.lower().startswith("javascript:") and not raw_link.lower().startswith("mailto:"):
                         jd_url = urljoin(career_url, raw_link)
                         parsed_career = urlparse(career_url)
                         parsed_jd = urlparse(jd_url)
                         is_distinct = (parsed_jd.netloc != parsed_career.netloc) or (parsed_jd.path.strip("/") != parsed_career.path.strip("/"))
                         if is_distinct and parsed_jd.path.strip("/") != "":
-                            return False  # incomplete and distinct link exists
+                            has_distinct_joblink = True
+            
+            # Check JOBDESC
+            if "JOBDESC" in fields:
+                jd_idx = fields.index("JOBDESC")
+                captured_jd = first[jd_idx] if isinstance(first, tuple) and jd_idx < len(first) else (first if jd_idx == 0 else None)
+
+        if "JOBDESC" not in fields:
+            # If no JOBDESC in listing, but distinct job detail links exist -> reject move_to_jd=0, require move_to_jd=1
+            if has_distinct_joblink:
+                return False
+            return True
+            
+        if captured_jd is None or not self._is_jd_complete(captured_jd):
+            if has_distinct_joblink:
+                return False
         return True
 
     # ── JDRGX / JDJSON: extract job URLs and fetch JD pages ─────────────────

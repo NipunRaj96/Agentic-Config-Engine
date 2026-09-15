@@ -316,6 +316,8 @@ class PipelineRunner:
 
         # Format config dict
         config_dict = output.config.to_json_dict() if output.config else None
+        jperl_dict = output.jperl_config.to_json_dict() if output.jperl_config else None
+        xpath_dict = output.xpath_config.to_json_dict() if output.xpath_config else None
 
         # Build telemetry summary payload
         telemetry_payload = {
@@ -329,6 +331,9 @@ class PipelineRunner:
             "confidence_percent": f"{round(output.confidence * 100, 1)}%",
             "primary_config_type": output.primary_config_type,
             "config": config_dict,
+            "jperl_config": jperl_dict,
+            "xpath_config": xpath_dict,
+            "has_both": bool(jperl_dict and xpath_dict),
             "extracted_jobs": output.extracted_jobs or [],
             "total_extracted": len(output.extracted_jobs) if output.extracted_jobs else 0,
             "total_tokens": output.total_tokens,
@@ -428,7 +433,9 @@ class PipelineRunner:
                     "siteType": output.site_type.value if output.site_type else "",
                     "crawlerType": output.crawler_type.value if output.crawler_type else "",
                     "confidence": round(output.confidence, 3),
-                    "config": json.dumps(output.config.to_json_dict()) if output.config else "",
+                    "config": json.dumps(output.config.to_json_dict(), ensure_ascii=False) if output.config else "",
+                    "jperl_config": json.dumps(output.jperl_config.to_json_dict(), ensure_ascii=False) if output.jperl_config else "",
+                    "xpath_config": json.dumps(output.xpath_config.to_json_dict(), ensure_ascii=False) if output.xpath_config else "",
                     "primary_config_type": output.primary_config_type or "",
                 }
                 results.append(res_entry)
@@ -465,6 +472,8 @@ class PipelineRunner:
                     "crawlerType": "",
                     "confidence": 0.0,
                     "config": "",
+                    "jperl_config": "",
+                    "xpath_config": "",
                     "primary_config_type": "",
                 }
                 results.append(err_entry)

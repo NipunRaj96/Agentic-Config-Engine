@@ -1,8 +1,8 @@
-# AI-Powered JPERL & XPath Configuration Engine
+# Agentic Config Engine — Autonomous Crawler Configuration Pipeline
 
-> **This document is the definitive master architecture guide and single source of truth for the AI-Config-Engine.**
+> **This document is the definitive master architecture guide and single source of truth for the Agentic-Config-Engine.**
 > It covers every flow, class, method, design principle, data contract, extraction engine, and backend handoff in exhaustive detail.
-> **Last updated: 2026-09-08 (v7 — 13-Step Unified Architecture with Multi-Engine Replay, Automated JD Strategy Discovery, URL Template Normalization, and Multi-Provider LLM Gateway)**
+> **Last updated: 2026-09-15 (v7 — 13-Step Unified Agentic Architecture with Multi-Engine Replay, Automated JD Strategy Discovery, URL Template Normalization, and Multi-Provider LLM Gateway)**
 
 ---
 
