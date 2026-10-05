@@ -1,0 +1,58 @@
+{
+  "description": "Signals for detecting unreachable, external, or non-HTML job description links where MOVE_TO_JD is impossible and should gracefully fall back to MOVE_TO_JD=0.",
+  "blocked_schemes_and_prefixes": [
+    "javascript:",
+    "mailto:",
+    "tel:",
+    "whatsapp:",
+    "wa.me/",
+    "#"
+  ],
+  "document_extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".rtf",
+    ".zip",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".odt",
+    ".ppt",
+    ".pptx"
+  ],
+  "file_sharing_domains": [
+    "drive.google.com",
+    "docs.google.com/document",
+    "docs.google.com/file",
+    "dropbox.com",
+    "onedrive.live.com",
+    "sharepoint.com",
+    "box.com"
+  ],
+  "external_form_domains": [
+    "forms.gle",
+    "docs.google.com/forms",
+    "typeform.com",
+    "jotform.com",
+    "surveymonkey.com"
+  ],
+  "unreachable_status_codes": [
+    400,
+    401,
+    403,
+    404,
+    410,
+    500,
+    502,
+    503,
+    504
+  ],
+  "blocked_mime_types": [
+    "application/pdf",
+    "application/octet-stream",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument",
+    "application/zip"
+  ]
+}

@@ -8,7 +8,20 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass
+    # Zero-dependency fallback to parse .env if python-dotenv is not installed
+    if os.path.exists(".env"):
+        try:
+            with open(".env", "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k, _v = _line.split("=", 1)
+                        _k = _k.strip()
+                        _v = _v.strip().strip("'\"")
+                        if _k and _k not in os.environ:
+                            os.environ[_k] = _v
+        except Exception:
+            pass
 
 # ── Internal Infrastructure ────────────────────────────────────────────────────
 ROBOT_CHECKER_URL: str = os.environ.get("ROBOT_CHECKER_URL", "")

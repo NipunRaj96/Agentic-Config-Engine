@@ -7,7 +7,6 @@
   <link href="https://fonts.googleapis.com" rel="preconnect">
   <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script>
     tailwind.config = {
@@ -57,7 +56,7 @@
     <div class="flex items-center gap-8">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-xl bg-primary-container/10 border border-primary-container/30 flex items-center justify-center text-primary-container shadow-[0_0_16px_rgba(0,242,254,0.25)]">
-          <span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">memory</span>
+          <svg class="w-5 h-5 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></svg>
         </div>
         <div class="flex items-center gap-2.5">
           <span class="text-xl font-bold text-primary tracking-tight">AI-Config-Engine</span>
@@ -85,7 +84,7 @@
     <!-- Right: Telemetry Node Badge -->
     <div class="flex items-center gap-3">
       <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container-low border border-white/[0.08] text-xs font-mono">
-        <span class="material-symbols-outlined text-sm text-secondary">terminal</span>
+        <svg class="w-3.5 h-3.5 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         <span class="text-on-surface font-medium">Auto Replay Sandbox</span>
       </div>
     </div>
@@ -103,7 +102,7 @@
         <div class="flex items-center justify-between pb-5 border-b border-white/[0.08]">
           <div class="flex items-center gap-2.5">
             <div class="w-8 h-8 rounded-xl bg-primary-container/10 flex items-center justify-center text-primary-container border border-primary-container/20">
-              <span class="material-symbols-outlined text-lg">tune</span>
+              <svg class="w-4 h-4 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
             </div>
             <h2 class="text-lg font-semibold text-on-surface tracking-tight">Control Center</h2>
           </div>
@@ -123,7 +122,7 @@
             <div class="flex items-center justify-between mb-2">
               <label class="text-[10.5px] font-mono font-semibold tracking-wider text-on-surface-variant">CRAWLER ID (COMPID)</label>
               <button class="text-xs font-mono text-primary-container hover:text-primary transition-colors flex items-center gap-1 font-medium" onclick="copyCrawlerId()">
-                <span class="material-symbols-outlined text-xs">content_copy</span>
+                <svg class="w-3.5 h-3.5 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <span id="copyFeedbackText">copy</span>
               </button>
             </div>
@@ -179,7 +178,7 @@
           
           <div id="batchDropzone" class="border-2 border-dashed border-primary-container/30 hover:border-primary-container/60 rounded-2xl p-7 bg-surface-container-lowest/50 text-center flex flex-col items-center justify-center gap-2.5 cursor-pointer transition-all group">
             <div class="w-14 h-14 rounded-2xl bg-primary-container/10 border border-primary-container/20 flex items-center justify-center text-primary-container group-hover:scale-105 transition-transform shadow-inner">
-              <span class="material-symbols-outlined text-2xl">upload_file</span>
+              <svg class="w-7 h-7 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </div>
             <div class="text-sm text-on-surface font-medium">Drop .csv crawl list here or click to browse</div>
             <div class="text-xs font-mono text-on-surface-variant">Expected columns: crawlerId, companyName, siteId, careerSiteUrl</div>
@@ -188,14 +187,14 @@
           <!-- Uploaded File Preview -->
           <div id="batchFilePreview" class="p-3.5 rounded-xl bg-surface-container-lowest border border-white/[0.08] flex items-center justify-between hidden">
             <div class="flex items-center gap-3 overflow-hidden">
-              <span class="material-symbols-outlined text-tertiary-container text-2xl">description</span>
+              <svg class="w-6 h-6 text-tertiary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
               <div class="truncate">
                 <div id="batchFilenameText" class="text-xs font-mono text-on-surface font-medium truncate">input_records.csv</div>
                 <div id="batchFileMetaText" class="text-[10px] font-mono text-on-surface-variant">0 TARGETS • 0 KB</div>
               </div>
             </div>
             <button onclick="removeUploadedCsv()" class="p-1.5 rounded-lg hover:bg-white/[0.08] text-on-surface-variant hover:text-error transition-colors" title="Remove File">
-              <span class="material-symbols-outlined text-base">close</span>
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
           </div>
         </div>
@@ -208,7 +207,7 @@
               <span class="text-xs font-mono text-on-surface font-medium">Force Refresh</span>
             </label>
             <span class="text-[10.5px] font-mono px-2.5 py-1 rounded-full bg-surface-container-low text-on-surface-variant border border-white/[0.06] flex items-center gap-1.5" title="Bypasses and clears SQLite domain cache">
-              <span class="material-symbols-outlined text-xs text-primary-container">cached</span>
+              <svg class="w-3.5 h-3.5 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
               Bypass Disk Cache
             </span>
           </div>
@@ -216,12 +215,12 @@
           <!-- Execution Action Buttons -->
           <div class="grid grid-cols-4 gap-3 pt-1">
             <button id="btnRunPipeline" onclick="triggerRunPipeline()" class="col-span-3 py-3 px-5 rounded-xl text-sm font-mono text-surface-container-lowest bg-primary-container hover:bg-white hover:shadow-[0_0_24px_rgba(0,242,254,0.5)] active:scale-[0.98] transition-all duration-150 flex items-center justify-center gap-2.5 font-bold tracking-tight shadow-lg">
-              <span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+              <svg class="w-5 h-5 fill-current" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               <span>Run Pipeline</span>
               <span class="ml-1 text-xs px-2 py-0.5 rounded-full bg-surface-container-lowest/20 font-normal">⌘↵</span>
             </button>
             <button onclick="resetForm()" class="py-3 px-3 rounded-xl bg-surface-container hover:bg-white/[0.08] text-on-surface-variant hover:text-on-surface border border-white/[0.09] flex items-center justify-center transition-colors active:scale-[0.98]" title="Reset Form Values">
-              <span class="material-symbols-outlined text-xl">restart_alt</span>
+              <svg class="w-5 h-5 text-on-surface-variant" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
             </button>
           </div>
         </div>
@@ -236,21 +235,23 @@
         <div class="flex flex-wrap items-center gap-2.5">
           <!-- Detection Path Pill -->
           <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container-lowest border border-tertiary-container/30 shadow-inner">
-            <span class="material-symbols-outlined text-tertiary-container text-sm">route</span>
+            <svg class="w-3.5 h-3.5 text-tertiary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 15v-3a3 3 0 0 1 3-3h6"/><polyline points="15 3 18 6 15 9"/></svg>
             <span class="text-xs text-on-surface-variant font-mono">Path:</span>
             <span id="telemetryPathText" class="text-xs text-tertiary-fixed font-semibold font-mono">STANDBY</span>
           </div>
 
           <!-- Tokens Usage Pill -->
           <div class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container-lowest border border-secondary/30 shadow-inner">
-            <span class="material-symbols-outlined text-secondary text-sm">psychology</span>
+            <svg class="w-3.5 h-3.5 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-5.04zM14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-4.44-5.04z"/></svg>
             <span class="text-xs text-on-surface-variant font-mono">Tokens:</span>
             <span id="telemetryTokensText" class="text-xs text-secondary font-semibold font-mono">0 tokens</span>
           </div>
 
           <!-- Status Indicator Pill -->
           <div id="telemetryStatusPill" class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-surface-container border border-white/10">
-            <span id="telemetryStatusIcon" class="material-symbols-outlined text-on-surface-variant text-sm">radio_button_unchecked</span>
+            <span id="telemetryStatusIcon" class="flex items-center justify-center">
+              <svg class="w-3.5 h-3.5 text-on-surface-variant" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+            </span>
             <span id="telemetryStatusText" class="text-xs text-on-surface-variant font-semibold font-mono">Ready</span>
           </div>
         </div>
@@ -278,7 +279,7 @@
       <div class="glass-card rounded-2xl p-5 shadow-xl">
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2.5">
-            <span class="material-symbols-outlined text-primary-container text-lg">account_tree</span>
+            <svg class="w-4 h-4 text-primary-container" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M6 9v6M9 6h3a3 3 0 0 1 3 3v3"/></svg>
             <h3 class="text-xs font-mono text-on-surface tracking-wider font-semibold">AUTOMATED PIPELINE EXECUTION (13 STEPS)</h3>
           </div>
           <div class="flex items-center gap-3 text-xs font-mono text-on-surface-variant">
@@ -300,19 +301,19 @@
         <div class="flex items-center justify-between px-5 pt-3 border-b border-white/[0.08] bg-surface-container-lowest/70">
           <div class="flex items-center gap-1">
             <button id="tabBtn_config" onclick="switchResultTab('config')" class="px-4 py-2.5 border-b-2 border-primary-container text-primary-container font-medium text-xs font-mono flex items-center gap-2">
-              <span class="material-symbols-outlined text-base">code</span>
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
               <span>Generated Config</span>
             </button>
             <button id="tabBtn_jobs" onclick="switchResultTab('jobs')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors">
-              <span class="material-symbols-outlined text-base">table_view</span>
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
               <span>Extracted Jobs <span id="extractedJobsTabCount">(0)</span></span>
             </button>
             <button id="tabBtn_batch_table" onclick="switchResultTab('batch_table')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors hidden">
-              <span class="material-symbols-outlined text-base">view_list</span>
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
               <span>Batch Results</span>
             </button>
             <button id="tabBtn_logs" onclick="switchResultTab('logs')" class="px-4 py-2.5 border-b-2 border-transparent text-on-surface-variant hover:text-on-surface font-medium text-xs font-mono flex items-center gap-2 transition-colors">
-              <span class="material-symbols-outlined text-base">terminal</span>
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
               <span>Execution Logs</span>
             </button>
           </div>
@@ -321,17 +322,17 @@
           <div class="flex items-center gap-2.5 pb-2">
             <!-- Single Job: Copy Config Button -->
             <button id="btnCopyConfigTop" onclick="copyGeneratedConfig()" class="px-3 py-1.5 rounded-xl bg-surface-container hover:bg-white/[0.08] text-primary text-xs font-mono border border-white/[0.1] flex items-center gap-1.5 transition-all active:scale-95">
-              <span class="material-symbols-outlined text-sm">content_copy</span>
+              <svg class="w-3.5 h-3.5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               <span id="configCopyLabel">Copy Config</span>
             </button>
 
             <!-- Batch: Download Buttons -->
             <button id="btnDownloadBatchCsv" onclick="downloadResultsCsv()" class="px-3.5 py-1.5 rounded-xl bg-tertiary-container/20 hover:bg-tertiary-container/30 text-tertiary-fixed text-xs font-mono font-medium border border-tertiary-container/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-sm hidden">
-              <span class="material-symbols-outlined text-sm">download</span>
+              <svg class="w-3.5 h-3.5 text-tertiary-fixed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               <span>Download output_results.csv</span>
             </button>
             <button id="btnDownloadReplayJson" onclick="downloadReplayLog()" class="px-3.5 py-1.5 rounded-xl bg-secondary-container/20 hover:bg-secondary-container/30 text-secondary text-xs font-mono font-medium border border-secondary/40 flex items-center gap-1.5 transition-all active:scale-95 shadow-sm hidden">
-              <span class="material-symbols-outlined text-sm">data_object</span>
+              <svg class="w-3.5 h-3.5 text-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>
               <span>Replay JSON</span>
             </button>
           </div>

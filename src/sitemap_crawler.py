@@ -81,6 +81,8 @@ class SitemapCrawlerStep(PipelineStep):
             state.detection_path = "sitemap"
             out = state.output
             out.config = JperlConfig(site_id=inp.site_id, body=config_dict)
+            out.jperl_config = out.config
+            out.primary_config_type = "jperl"
             out.tech_status = TechStatus.DONE
             out.sub_tech_comment = SubTechComment.JOBS_NEW_POOL
             out.tech_comments = f"SitemapCrawlerStep: compiled sitemap config from {sitemap_url} matching {len(job_urls)} jobs."

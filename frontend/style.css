@@ -19,6 +19,11 @@
   --border-focus: rgba(0, 242, 254, 0.35);
 }
 
+/* Vector SVG Icon Global Alignment */
+svg {
+  flex-shrink: 0;
+}
+
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;

@@ -235,5 +235,17 @@
     "is_active": true,
     "last_verified": "2026-06-04",
     "notes": ""
+  },
+  {
+    "rule_name": "jobdivaRule2",
+    "platform": "JobDiva",
+    "url_signatures": [
+      "jobdiva.com",
+      "www2.jobdiva.com",
+      "candidates/myjobs"
+    ],
+    "is_active": true,
+    "last_verified": "2026-09-25",
+    "notes": "JobDiva ATS portal/sitemap parent rule"
   }
 ]

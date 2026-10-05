@@ -146,7 +146,7 @@ class ConfigGenerator:
 
         # Write to cache if config was resolved (either successfully or to a final non-workable/not-fixable state)
         # Skip caching if we loaded from the cache to avoid redundant writes
-        if state.detection_path != "cache" and output.tech_status in (TechStatus.DONE, TechStatus.NON_WORKABLE, TechStatus.NOT_FIXABLE, TechStatus.FAILED):
+        if state.detection_path != "cache" and output.tech_status in (TechStatus.DONE, TechStatus.NON_WORKABLE, TechStatus.NOT_FIXABLE):
             domain = ConfigCacheStep._get_domain(inp.career_site_url)
             if domain:
                 ConfigCacheStep.save(

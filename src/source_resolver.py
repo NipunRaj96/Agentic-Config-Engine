@@ -63,6 +63,21 @@ class SourceResolver(PipelineStep):
         expected_jobs = inp.jobs_on_career_page or 0
         logger.info("SourceResolver: analyzing source for %s (expected jobs=%d)", inp.career_site_url, expected_jobs)
 
+        # ── Check for late-injected ATS iframes from rendered DOM upfront ──────────
+        if state.page_html:
+            from src.ats_fingerprinter import ATSFingerprinter
+            late_ats = ATSFingerprinter().detect_candidates(
+                inp.career_site_url, inp.integration_link, html_content=state.page_html, state=state
+            )
+            if late_ats:
+                existing_rules = {c.parent_rule_name for c in (state.ats_candidates or [])}
+                new_candidates = list(state.ats_candidates or [])
+                for c in late_ats:
+                    if c.parent_rule_name not in existing_rules:
+                        new_candidates.append(c)
+                        existing_rules.add(c.parent_rule_name)
+                state.ats_candidates = new_candidates
+
         # ── Check direct-domain ATS zero-job check upfront ──────────────────────────
         for ats_cand in (state.ats_candidates or []):
             platform = ats_cand.platform_info
@@ -212,8 +227,11 @@ class SourceResolver(PipelineStep):
 
         keys_lower = {k.lower() for k in replayed.keys}
 
-        has_title = any("title" in k for k in keys_lower)
-        has_link_or_id = any(any(x in k for x in ["apply", "link", "url", "id", "slug", "href", "requisition", "req"]) for k in keys_lower)
+        has_title = any(
+            any(x in k for x in ["title", "role", "designation", "position", "headline", "jobname", "job_name", "occupation"])
+            for k in keys_lower
+        )
+        has_link_or_id = any(any(x in k for x in ["apply", "link", "url", "id", "slug", "href", "requisition", "req", "code"]) for k in keys_lower)
 
         if not (has_title and has_link_or_id):
             return 4
@@ -386,23 +404,26 @@ class SourceResolver(PipelineStep):
         for ats_cand in (state.ats_candidates or []):
             platform = ats_cand.platform_info
             
-            # Check direct domain match
+            # Check direct domain or iframe match
             from urllib.parse import urlparse
             direct_match = False
-            for url in (inp.integration_link, inp.career_site_url):
-                if not url:
-                    continue
-                url_parsed = urlparse(url)
-                host = url_parsed.hostname or ""
-                for sig in platform.get("url_signatures", []):
-                    if sig.lower() in host.lower():
-                        direct_match = True
+            if ats_cand.matched_by == "iframe":
+                direct_match = True
+            else:
+                for url in (inp.integration_link, inp.career_site_url):
+                    if not url:
+                        continue
+                    url_parsed = urlparse(url)
+                    host = url_parsed.hostname or ""
+                    for sig in platform.get("url_signatures", []):
+                        if sig.lower() in host.lower():
+                            direct_match = True
+                            break
+                    if direct_match:
                         break
-                if direct_match:
-                    break
             
             if direct_match:
-                logger.info("SourceResolver: Direct domain ATS match for %s", ats_cand.parent_rule_name)
+                logger.info("SourceResolver: Direct/Iframe ATS match for %s (matched_by=%s)", ats_cand.parent_rule_name, ats_cand.matched_by)
                 unified_candidates.append(UnifiedCandidate(
                     source_type=SourceType.ATS,
                     captured_request=None,

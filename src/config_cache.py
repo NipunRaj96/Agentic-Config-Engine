@@ -52,6 +52,10 @@ class ConfigCacheStep(PipelineStep):
         if not cached:
             return StepResult(StepSignal.CONTINUE)
 
+        # Do not treat FAILED records as cache hits (transient errors must re-run)
+        if cached["tech_status"] == TechStatus.FAILED.value:
+            return StepResult(StepSignal.CONTINUE)
+
         # Self-healing: If cached status is DONE but config_json is empty, treat as cache miss
         if cached["tech_status"] == TechStatus.DONE.value and not cached["config_json"]:
             logger.warning(

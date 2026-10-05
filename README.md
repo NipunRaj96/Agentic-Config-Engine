@@ -1,8 +1,8 @@
-# Agentic Config Engine — Autonomous Crawler Configuration Pipeline
+# AI-Powered JPERL & XPath Configuration Engine
 
-> **This document is the definitive master architecture guide and single source of truth for the Agentic-Config-Engine.**
+> **This document is the definitive master architecture guide and single source of truth for the AI-Config-Engine.**
 > It covers every flow, class, method, design principle, data contract, extraction engine, and backend handoff in exhaustive detail.
-> **Last updated: 2026-09-15 (v7 — 13-Step Unified Agentic Architecture with Multi-Engine Replay, Automated JD Strategy Discovery, URL Template Normalization, and Multi-Provider LLM Gateway)**
+> **Last updated: 2026-09-08 (v7 — 13-Step Unified Architecture with Multi-Engine Replay, Automated JD Strategy Discovery, URL Template Normalization, and Multi-Provider LLM Gateway)**
 
 ---
 
@@ -626,7 +626,8 @@ The Replay Engine is the execution sandbox that tests and scores crawler configu
   3. Evaluates fields: `job["description"]` $\rightarrow$ `JOBDESC`, `job["title"]` $\rightarrow$ `JOBTITLE`, `job["id"]` $\rightarrow$ `JOBLINK`, `job["id"]` $\rightarrow$ `JOBID`.
 
 ### `RegexParser` & PCRE Group Mapping ([`src/extraction/regex_parser.py`](file:///c:/Users/nipun.kumar/Projects/config/src/extraction/regex_parser.py))
-* Executes PCRE-compatible regular expressions using Python's `regex` / `re` module with `re.DOTALL | re.IGNORECASE`.
+* Executes PCRE-compatible regular expressions using Matthew Barnett's high-performance `regex` C-engine with `regex.DOTALL | regex.IGNORECASE`.
+* **Native ReDoS & Timeout Protection:** All regex searches and pattern compilations execute with a hard C-level `timeout=2.0s` (`REGEX_TIMEOUT_SECONDS`), completely eliminating infinite catastrophic backtracking hangs on complex nested/lookahead HTML patterns.
 * Maps match groups ($1..N$) to tokens defined in `LOCRGXSEQ`.
 * HTML entity unescapes captured values (`&amp;` $\rightarrow$ `&`, `&quot;` $\rightarrow$ `"`).
 
@@ -875,15 +876,19 @@ When modifying or debugging this codebase, keep these 6 architectural invariants
 * **Why:** At this stage, `JDExtractor` has not run yet, so `JDRGX1..N` does not exist in the intermediate result. If consistency is strictly enforced prematurely, the compiler will abort valid listing extractions.
 * **Final Compile:** `ConfigCompileStep` (Step 13) runs with `enforce_jd_consistency=True` to guarantee all production configs strictly contain required detail fields.
 
-### 2. The `{{VARJOBLINK}}` Double-Prefix Invariant
+### 2. The `move_to_jd` State Synchronization Invariant
+* **Trap:** When `LLMReasoner` processes a JSON API feed that provides complete inline job descriptions (`MOVE_TO_JD = 0`), or when detail links cannot be fetched via HTTP GET, setting `MOVE_TO_JD = 1` without generating `JDRGX`/`JDJSON` causes a fatal compile failure (`invalid-config-missing-JOBDESC`).
+* **Rule:** Always synchronize `move_to_jd = 0` across `LLMExtractionResult` when full descriptions exist in listing payloads or when detail pages cannot be verified. `Compiler.from_llm()` explicitly honors `move_to_jd == 0` by emitting `MOVE_TO_JD: 0` and preserving the JSON API configuration without crashing or falling back to XPath.
+
+### 3. The `{{VARJOBLINK}}` Double-Prefix Invariant
 * **Trap:** If a site’s `LOCRGX` or `LOCJSON` captures a fully qualified URL (e.g. `https://domain.com/job/123`), the compiler MUST emit `JOBLINK: "{{VARJOBLINK}}"`.
 * **Never do this:** `JOBLINK: "https://domain.com/{{VARJOBLINK}}"` when `VARJOBLINK` already has `https://` — this results in broken `https://domain.com/https://domain.com/job/123` crawler errors.
 
-### 3. Zoho Entity-Encoding Normalization
+### 4. Zoho Entity-Encoding Normalization
 * **Trap:** Zoho Recruit embeds JSON in HTML with encoded quotes: `<input value="[{&#34;Posting_Title&#34;:&#34;...&#34;}]">`.
 * **Rule:** Always match entity variants `(?:&#34;|&quot;)` in PCRE patterns rather than raw unescaped quotes.
 
-### 4. Clearing Cache for Target Records
+### 5. Clearing Cache for Target Records
 To force-reprocess a domain without using cached configs:
 ```python
 import sqlite3
@@ -980,5 +985,5 @@ Run the full automated test suite covering unit tests, compiler checks, and pars
 ```powershell
 uv run pytest tests/ -v
 ```
-*(Benchmark: **117 passed, 3 skipped** across 120 tests with 0 regressions).*
+*(Benchmark: **121 passed, 3 skipped** across 124 tests with 0 regressions).*
 

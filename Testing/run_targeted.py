@@ -64,8 +64,14 @@ def clear_target_cache():
         conn = sqlite3.connect('knowledge_base/config_cache.db')
         cursor = conn.cursor()
         for domain in domains:
-            cursor.execute("DELETE FROM config_cache WHERE domain = ?", (domain,))
-            cursor.execute("DELETE FROM jd_strategy_cache WHERE domain = ?", (domain,))
+            try:
+                cursor.execute("DELETE FROM config_cache WHERE domain = ?", (domain,))
+            except Exception:
+                pass
+            try:
+                cursor.execute("DELETE FROM jd_strategy_cache WHERE domain = ?", (domain,))
+            except Exception:
+                pass
         conn.commit()
         conn.close()
         print(f"Cleared cache for target domains: {domains}")

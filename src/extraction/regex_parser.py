@@ -1,30 +1,58 @@
-import re
+import regex
 import logging
-import concurrent.futures
-from typing import Optional
+from typing import Optional, Union, Any
 
 logger = logging.getLogger(__name__)
 
-_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-
-def safe_regex_findall(compiled: re.Pattern, text: str, timeout_s: float = 2.0) -> list:
-    """Executes compiled.findall(text) with a strict execution timeout to prevent ReDoS hangs."""
-    future = _EXECUTOR.submit(compiled.findall, text)
+def safe_regex_findall(pattern: Union[str, Any], text: str, timeout_s: float = 2.0) -> list:
+    """
+    Executes regex findall with a strict C-level execution timeout to prevent ReDoS hangs.
+    Uses Matthew Barnett's native regex C engine.
+    """
     try:
-        return future.result(timeout=timeout_s)
-    except concurrent.futures.TimeoutError:
+        if hasattr(pattern, "pattern"):
+            pat_str = pattern.pattern
+            flags = getattr(pattern, "flags", regex.DOTALL)
+        else:
+            pat_str = str(pattern)
+            flags = regex.DOTALL
+
+        compiled = regex.compile(pat_str, flags)
+        return compiled.findall(text, timeout=timeout_s)
+    except TimeoutError:
         logger.warning("RegexParser: regex execution timed out (>%.1fs) due to potential ReDoS/backtracking", timeout_s)
         raise TimeoutError(f"Regex execution timed out (>{timeout_s}s)")
+    except Exception as exc:
+        if "timeout" in str(exc).lower():
+            logger.warning("RegexParser: regex execution timed out (>%.1fs): %s", timeout_s, exc)
+            raise TimeoutError(f"Regex execution timed out (>{timeout_s}s)")
+        raise
 
 
-def safe_regex_search(compiled: re.Pattern, text: str, timeout_s: float = 2.0) -> Optional[re.Match]:
-    """Executes compiled.search(text) with a strict execution timeout to prevent ReDoS hangs."""
-    future = _EXECUTOR.submit(compiled.search, text)
+def safe_regex_search(pattern: Union[str, Any], text: str, timeout_s: float = 2.0) -> Optional[Any]:
+    """
+    Executes regex search with a strict C-level execution timeout to prevent ReDoS hangs.
+    Uses Matthew Barnett's native regex C engine.
+    """
     try:
-        return future.result(timeout=timeout_s)
-    except concurrent.futures.TimeoutError:
+        if hasattr(pattern, "pattern"):
+            pat_str = pattern.pattern
+            flags = getattr(pattern, "flags", regex.DOTALL)
+        else:
+            pat_str = str(pattern)
+            flags = regex.DOTALL
+
+        compiled = regex.compile(pat_str, flags)
+        return compiled.search(text, timeout=timeout_s)
+    except TimeoutError:
         logger.warning("RegexParser: regex search timed out (>%.1fs) due to potential ReDoS/backtracking", timeout_s)
+        return None
+    except Exception as exc:
+        if "timeout" in str(exc).lower():
+            logger.warning("RegexParser: regex search timed out (>%.1fs): %s", timeout_s, exc)
+            return None
+        logger.debug("RegexParser: regex search error: %s", exc)
         return None
 
 
@@ -46,10 +74,8 @@ class RegexParser:
 
         try:
             # Strip comments to avoid commented-out matches
-            html_clean = re.sub(r'(?s)<!--.*?-->', '', page_html)
-            
-            compiled = re.compile(locrgx, re.DOTALL)
-            raw_matches = safe_regex_findall(compiled, html_clean, timeout_s=2.0)
+            html_clean = regex.sub(r'(?s)<!--.*?-->', '', page_html)
+            raw_matches = safe_regex_findall(locrgx, html_clean, timeout_s=2.0)
             if not raw_matches:
                 return []
 
@@ -101,7 +127,7 @@ class RegexParser:
 
         import html
         html_clean = html.unescape(detail_html)
-        html_clean = re.sub(r'(?s)<!--.*?-->', '', html_clean)
+        html_clean = regex.sub(r'(?s)<!--.*?-->', '', html_clean)
 
         extracted_fields: dict[str, str] = {}
 
@@ -126,8 +152,7 @@ class RegexParser:
             if jdrgx_val and jdrgxseq_val:
                 semantics = [s.strip() for s in jdrgxseq_val.split(",") if s.strip()]
                 try:
-                    compiled = re.compile(jdrgx_val, re.DOTALL)
-                    m = safe_regex_search(compiled, html_clean, timeout_s=2.0)
+                    m = safe_regex_search(jdrgx_val, html_clean, timeout_s=2.0)
                     if m:
                         if m.groups():
                             for g_idx, g_val in enumerate(m.groups()):
@@ -150,4 +175,5 @@ class RegexParser:
             idx += 1
 
         return extracted_fields
+
 

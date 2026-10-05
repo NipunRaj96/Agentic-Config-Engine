@@ -1,4 +1,5 @@
 import re
+import regex
 import logging
 from typing import Optional
 from src.extraction.replay_engine import ReplayEngine
@@ -175,15 +176,30 @@ def score_title(title: str, val_config: ValidationConfig = VAL_CONFIG) -> float:
     return score
 
 
+from enum import Enum
+
+
+class ValidationScope(str, Enum):
+    PAGE    = "PAGE"     # Validates extraction from a single page/batch
+    CATALOG = "CATALOG"  # Validates total accumulated extraction across all pages
+
+
 def validate_job_objects(
     job_objects: list[dict[str, str]],
     expected_count: int,
-    raw_source: Optional[str] = None
+    raw_source: Optional[str] = None,
+    scope: ValidationScope = ValidationScope.PAGE,
 ) -> tuple[bool, str]:
     """
     Standardized, format-agnostic semantic validator for job objects.
     Enforces Title quality, validates LOCATION/EXPERIENCE/JOBID against raw source to prevent hallucinations,
     and protects JOBDESC completeness.
+
+    Supports two validation scopes:
+      - ValidationScope.PAGE (default): Evaluates whether a single page/batch contains a structurally valid
+        and plausible batch of jobs (eliminates the total-catalog vs single-page validation trap).
+      - ValidationScope.CATALOG: Evaluates the total accumulated job count across all crawled pages against the
+        total catalog estimate.
     """
     if not job_objects:
         return False, "No jobs extracted."
@@ -213,18 +229,34 @@ def validate_job_objects(
 
         # 2. Check JOBID (Validate length, negative noise tokens, and normalized raw source presence)
         job_id = job.get("JOBID", "").strip()
+        job_link = job.get("JOBLINK", "").strip()
         if job_id and job_id.lower() not in {"null", "none", ""}:
             explicit_job_ids.append(job_id)
-            if len(job_id) > 60:
+            
+            # Determine if this identifier is a URL, path slug, or derived from JOBLINK
+            is_url_or_slug = (
+                (bool(job_link) and job_id == job_link)
+                or job_id.startswith(("http://", "https://", "/", "./", "?"))
+                or (("/" in job_id or any(job_id.endswith(ext) for ext in [".html", ".htm", ".php", ".aspx", ".jsp"])) and len(job_id.split()) <= 4)
+            )
+            max_id_len = 255 if is_url_or_slug else 60
+            if len(job_id) > max_id_len:
                 return False, f"Extracted JOBID is excessively long ({len(job_id)} chars), likely matched non-ID content."
             
             job_id_lower = job_id.lower()
-            if any(tok in job_id_lower for tok in VAL_CONFIG.job_id_negative_tokens) or any(c in job_id for c in ["<div", "<button", "<script", "{", "}"]):
+            if any(tok in job_id_lower for tok in VAL_CONFIG.job_id_negative_tokens) or any(c in job_id for c in ["<div", "<button", "<script", "<span", "<table", "<p", "{", "}", "\n"]):
                 return False, f"Extracted JOBID contains invalid UI or JS noise: '{job_id[:30]}'."
             
-            # If JOBID is distinct from JOBTITLE (i.e. explicitly captured ID, not title fallback), verify existence in normalized raw source
+            # If JOBID is distinct from JOBTITLE and not a domain-prefixed link, verify existence in normalized raw source
             if job_id.lower() != title.lower() and norm_raw_source:
-                norm_id = normalize_source_text(job_id)
+                target_check = job_id
+                if is_url_or_slug and "://" in job_id:
+                    try:
+                        from urllib.parse import urlparse
+                        target_check = urlparse(job_id).path or job_id
+                    except Exception:
+                        target_check = job_id
+                norm_id = normalize_source_text(target_check)
                 if norm_id and norm_id not in norm_raw_source:
                     return False, f"Extracted JOBID '{job_id}' not found in normalized raw source (hallucination detected)."
 
@@ -243,7 +275,7 @@ def validate_job_objects(
         # 4. Check EXPERIENCE (Validate against normalized raw source, catch sliced paragraphs)
         exp = job.get("EXPERIENCE", "").strip()
         if exp and exp.lower() not in {"null", "none", ""}:
-            if len(exp) > 60:
+            if len(exp) > 120:
                 return False, f"Extracted EXPERIENCE is too long ({len(exp)} chars), likely sliced from a job description paragraph."
             if "<div" in exp.lower() or "{" in exp or "}" in exp:
                 return False, f"Extracted EXPERIENCE contains invalid markup/JSON syntax: '{exp[:30]}'."
@@ -284,24 +316,67 @@ def validate_job_objects(
         if unique_ratio < 0.30:
             return False, f"Duplicate job titles ratio is too high: only {len(unique_titles)} unique out of {total_jobs}."
 
-    # 4. Expected count and tolerance validation
-    if expected_count > 0:
-        # Reject if the expected list is large (>= 5) but we extracted <= 1 matches (likely a false positive match on layout header/footer)
-        if expected_count >= 5 and total_jobs <= 1:
-            return False, f"Extracted only {total_jobs} job(s) but expected {expected_count} jobs. Highly likely a false positive."
-        # Reject if extracted job count is too low compared to expected count (under-extraction threshold < 60%)
-        if expected_count >= 3 and total_jobs < expected_count * 0.60:
-            return False, f"Extracted only {total_jobs} job(s) but expected {expected_count} jobs (less than 60% of expected count)."
-        # Reject if matched count is excessively higher than expected (e.g. > 4x expected count)
-        if total_jobs > max(30, expected_count * 4):
-            return False, f"Extracted job count ({total_jobs}) is excessively higher than expected ({expected_count})."
+    # 4. Scope-specific count validation
+    if scope == ValidationScope.CATALOG:
+        # ── CATALOG Scope: validates total accumulated jobs across full crawl ────
+        if expected_count > 0:
+            min_allowed = max(2, int(expected_count * 0.40))
+            if total_jobs < min_allowed:
+                return False, f"Extracted only {total_jobs} total job(s) across catalog but expected {expected_count} jobs."
+            if total_jobs > max(50, expected_count * 3):
+                return False, f"Extracted total job count ({total_jobs}) is excessively higher than expected ({expected_count})."
+        else:
+            if total_jobs < 1:
+                return False, "Extracted 0 jobs."
     else:
-        # If expected count is not specified (0), we ensure at least 1 job is matched
-        if total_jobs < 1:
-            return False, "Extracted 0 jobs."
+        # ── PAGE Scope: validates single-page batch plausibility & quality ─────
+        if expected_count > 0:
+            # When the expected catalog is small (<= 6 jobs), all jobs are expected on the single page
+            if expected_count <= 6:
+                min_allowed = max(1, int(expected_count * 0.50))
+                if total_jobs < min_allowed:
+                    return False, f"Extracted only {total_jobs} job(s) but expected {expected_count} jobs on single page."
+            else:
+                # When expected_count > 6, the site is likely paginated or batched
+                # Reject if only 1 job matched on a site with >= 5 expected jobs
+                if expected_count >= 5 and total_jobs <= 1:
+                    return False, f"Extracted only {total_jobs} job(s) from page on a site with {expected_count} expected jobs. Likely a false positive match on layout header/footer."
+
+                # Reject if only <= 2 jobs matched on a large catalog (>= 20 expected jobs)
+                if expected_count >= 20 and total_jobs <= 2:
+                    return False, f"Extracted only {total_jobs} job(s) from page on a site with {expected_count} expected jobs. Stray false positive match."
+
+                # High quality extraction: >= 3 jobs, zero noise, zero empty, and high title uniqueness (>= 80%)
+                is_high_quality_batch = (
+                    total_jobs >= 3
+                    and noise_titles_count == 0
+                    and empty_titles_count == 0
+                    and (len(unique_titles) / total_jobs >= 0.80)
+                )
+
+                if not is_high_quality_batch:
+                    # Non-high-quality batch requires at least 25% of expected or min 3 jobs
+                    min_allowed = max(3, int(expected_count * 0.25))
+                    if total_jobs < min_allowed:
+                        return False, f"Extracted only {total_jobs} job(s) with lower quality metrics (expected {expected_count} jobs or high-quality clean batch)."
+
+            # Reject if page batch is excessively high (e.g. > max(60, expected_count * 4))
+            if total_jobs > max(60, expected_count * 4):
+                return False, f"Extracted job count ({total_jobs}) is excessively higher than expected single-page batch ({expected_count})."
+        else:
+            # If expected count is not specified (0), we ensure at least 1 job is matched
+            if total_jobs < 1:
+                return False, "Extracted 0 jobs."
 
     return True, ""
 
+
+def validate_catalog_coverage(
+    job_objects: list[dict[str, str]],
+    expected_count: int,
+) -> tuple[bool, str]:
+    """Validates total accumulated jobs across all pages in a completed crawl."""
+    return validate_job_objects(job_objects, expected_count, scope=ValidationScope.CATALOG)
 
 
 def classify_failure(tech_comments: str, error_reason: str) -> str:
@@ -326,13 +401,19 @@ def classify_failure(tech_comments: str, error_reason: str) -> str:
 
 # ── Backward Compatible Validation Wrappers ───────────────────────────────
 
-def validate_regex_jobs(locrgx: str, locrgxseq: str, html: str, expected_count: int) -> tuple[bool, str, list[dict]]:
+def validate_regex_jobs(
+    locrgx: str,
+    locrgxseq: str,
+    html: str,
+    expected_count: int,
+    scope: ValidationScope = ValidationScope.PAGE,
+) -> tuple[bool, str, list[dict]]:
     """
     Replays Regex extraction through ReplayEngine and validates.
     """
     try:
-        # Check capture group count consistency
-        compiled = re.compile(locrgx, re.DOTALL)
+        # Check capture group count consistency with regex C engine
+        compiled = regex.compile(locrgx, regex.DOTALL)
         fields = [f.strip() for f in locrgxseq.split(",") if f.strip()]
         if compiled.groups != len(fields):
             return False, f"Regex capture groups count ({compiled.groups}) does not match fields count in LOCRGXSEQ ({len(fields)}).", []
@@ -342,7 +423,7 @@ def validate_regex_jobs(locrgx: str, locrgxseq: str, html: str, expected_count: 
     config = {"LOCRGX": locrgx, "LOCRGXSEQ": locrgxseq}
     try:
         job_list = ReplayEngine.run(config, page_html=html)
-        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=html)
+        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=html, scope=scope)
         return is_valid, err_msg, job_list
     except TimeoutError:
         return False, "Regex execution timed out (>2.0s) due to potential catastrophic backtracking (ReDoS). Please simplify the regex and avoid chained wildcards.", []
@@ -350,14 +431,20 @@ def validate_regex_jobs(locrgx: str, locrgxseq: str, html: str, expected_count: 
         return False, f"Regex validation exception: {e}", []
 
 
-def validate_xpath_jobs(page_html: str, xpath: str, expected_count: int) -> tuple[bool, str, list[dict]]:
+def validate_xpath_jobs(
+    page_html: str,
+    xpath: str,
+    expected_count: int,
+    scope: ValidationScope = ValidationScope.PAGE,
+) -> tuple[bool, str, list[dict]]:
     """
     Replays XPath extraction through ReplayEngine and validates.
     """
     config = {"xpath": xpath}
     try:
         job_list = ReplayEngine.run(config, page_html=page_html)
-        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=page_html)
+        is_valid, err_msg = validate_job_objects(job_list, expected_count, raw_source=page_html, scope=scope)
         return is_valid, err_msg, job_list
     except Exception as e:
         return False, f"XPath validation exception: {e}", []
+

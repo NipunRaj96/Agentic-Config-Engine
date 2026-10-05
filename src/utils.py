@@ -9,12 +9,14 @@ def trim_html(html: str, max_chars: int = 30000, anchor_titles: Optional[List[st
     Trims HTML source to the specified character limit, centering the window
     around the most job-relevant region of the page using anchor pattern scoring.
     """
-    # 1. Clean CSS styles, SVGs, headers, footers, nav blocks
+    # 1. Clean CSS styles, SVGs, headers, footers, nav blocks, noscript, and tracking scripts
     cleaned = re.sub(r'(?s)<style\b[^>]*>.*?</style>', '', html)
     cleaned = re.sub(r'(?s)<svg\b[^>]*>.*?</svg>', '', cleaned)
     cleaned = re.sub(r'(?s)<header\b[^>]*>.*?</header>', '', cleaned)
     cleaned = re.sub(r'(?s)<footer\b[^>]*>.*?</footer[^>]*>', '', cleaned)
     cleaned = re.sub(r'(?s)<nav\b[^>]*>.*?</nav>', '', cleaned)
+    cleaned = re.sub(r'(?s)<noscript\b[^>]*>.*?</noscript>', '', cleaned)
+    cleaned = re.sub(r'(?s)<script(?![^>]*type=["\']application/(?:ld\+)?json["\'])[^>]*>.*?</script>', '', cleaned)
 
     if len(cleaned) < max_chars:
         return cleaned

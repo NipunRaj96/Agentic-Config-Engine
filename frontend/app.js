@@ -3,6 +3,22 @@
  * Handles WebSocket bidirectional streaming, step timeline, AST formatting, and batch controls.
  */
 
+// ── Zero-Dependency SVG Icon Dictionary (100% Offline & Corporate Proxy Immune) ──
+const SVG_ICONS = {
+  schedule: `<svg class="w-3.5 h-3.5 text-on-surface-variant/70 inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+  running: `<svg class="w-3.5 h-3.5 text-primary-container animate-spin inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`,
+  check_circle: `<svg class="w-3.5 h-3.5 text-tertiary-container inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+  skipped: `<svg class="w-3.5 h-3.5 text-on-surface-variant/60 inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`,
+  failed: `<svg class="w-3.5 h-3.5 text-error inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  circle: `<svg class="w-3.5 h-3.5 text-on-surface-variant inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>`,
+  open_in_new: `<svg class="w-3.5 h-3.5 inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`,
+  play_arrow: `<svg class="w-5 h-5 fill-current inline-block align-middle" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>`,
+  spinner_lg: `<svg class="w-5 h-5 animate-spin inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`,
+  info: `<svg class="w-5 h-5 text-primary-container inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
+  error_lg: `<svg class="w-5 h-5 text-error inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  check_lg: `<svg class="w-5 h-5 text-tertiary-container inline-block align-middle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+};
+
 // ── Application State ────────────────────────────────────────────────────────
 const AppState = {
   ws: null,
@@ -11,6 +27,10 @@ const AppState = {
   isRunning: false,
   currentCrawlerId: '',
   latestConfig: null,
+  latestJperlConfig: null,
+  latestXpathConfig: null,
+  latestResult: null,
+  selectedConfigType: 'xpath',
   extractedJobs: [],
   batchRows: [],
   batchResults: [],
@@ -177,7 +197,7 @@ function renderStepMatrix() {
         <span class="text-label-caps text-on-surface-variant/60 font-mono font-bold">${String(step.id).padStart(2, '0')}</span>
         <div class="flex items-center gap-1.5">
           <span id="stepTime_${step.id}" class="text-on-surface-variant/60 font-mono text-[10px]">--</span>
-          <span id="stepIcon_${step.id}" class="material-symbols-outlined text-on-surface-variant text-sm">schedule</span>
+          <span id="stepIcon_${step.id}" class="flex items-center">${SVG_ICONS.schedule}</span>
         </div>
       </div>
       <div id="stepName_${step.id}" class="text-code-sm text-on-surface font-semibold truncate" title="${step.name}">${step.title || step.name}</div>
@@ -193,11 +213,7 @@ function resetStepMatrix() {
     const descElem = document.getElementById(`stepDesc_${step.id}`);
     const timeElem = document.getElementById(`stepTime_${step.id}`);
     if (card) card.className = 'step-item step-pending p-3 rounded-xl bg-surface-container-lowest border border-white/[0.08] flex flex-col justify-between shadow-sm min-h-[86px]';
-    if (icon) {
-      icon.innerText = 'schedule';
-      icon.className = 'material-symbols-outlined text-on-surface-variant text-sm';
-      icon.style.fontVariationSettings = "";
-    }
+    if (icon) icon.innerHTML = SVG_ICONS.schedule;
     if (descElem) {
       descElem.innerText = step.pendingDesc;
       descElem.title = step.pendingDesc;
@@ -221,11 +237,7 @@ function setStepState(stepId, status, descText = null, durationMs = null) {
 
   if (status === 'running') {
     card.className = 'step-item step-running p-3 rounded-xl bg-surface-container-lowest border border-primary-container shadow-md flex flex-col justify-between min-h-[86px]';
-    if (icon) {
-      icon.innerText = 'progress_activity';
-      icon.className = 'material-symbols-outlined text-primary-container text-sm animate-spin';
-      icon.style.fontVariationSettings = "";
-    }
+    if (icon) icon.innerHTML = SVG_ICONS.running;
     if (descElem) {
       descElem.innerText = descText || stepDef.activeDesc || 'Processing...';
       descElem.title = descElem.innerText;
@@ -237,11 +249,7 @@ function setStepState(stepId, status, descText = null, durationMs = null) {
     }
   } else if (status === 'done') {
     card.className = 'step-item step-done p-3 rounded-xl bg-surface-container-lowest border border-tertiary-container/40 flex flex-col justify-between shadow-sm min-h-[86px]';
-    if (icon) {
-      icon.innerText = 'check_circle';
-      icon.className = 'material-symbols-outlined text-tertiary-container text-sm';
-      icon.style.fontVariationSettings = "'FILL' 1";
-    }
+    if (icon) icon.innerHTML = SVG_ICONS.check_circle;
     if (descElem) {
       descElem.innerText = descText || 'Completed';
       descElem.title = descElem.innerText;
@@ -253,11 +261,7 @@ function setStepState(stepId, status, descText = null, durationMs = null) {
     }
   } else if (status === 'skipped') {
     card.className = 'step-item step-skipped p-3 rounded-xl bg-surface-container-lowest border border-white/[0.08] opacity-60 flex flex-col justify-between shadow-sm min-h-[86px]';
-    if (icon) {
-      icon.innerText = 'block';
-      icon.className = 'material-symbols-outlined text-on-surface-variant text-sm';
-      icon.style.fontVariationSettings = "";
-    }
+    if (icon) icon.innerHTML = SVG_ICONS.skipped;
     if (descElem) {
       descElem.innerText = descText || 'Skipped';
       descElem.title = descElem.innerText;
@@ -269,11 +273,7 @@ function setStepState(stepId, status, descText = null, durationMs = null) {
     }
   } else if (status === 'failed') {
     card.className = 'step-item step-failed p-3 rounded-xl bg-surface-container-lowest border border-error flex flex-col justify-between shadow-md min-h-[86px]';
-    if (icon) {
-      icon.innerText = 'cancel';
-      icon.className = 'material-symbols-outlined text-error text-sm';
-      icon.style.fontVariationSettings = "'FILL' 1";
-    }
+    if (icon) icon.innerHTML = SVG_ICONS.failed;
     if (descElem) {
       descElem.innerText = descText || 'Failed';
       descElem.title = descElem.innerText;
@@ -372,15 +372,15 @@ function updateStatusPill(status, subComment, colorType = 'tertiary') {
   text.innerText = `${status} / ${subComment || 'Done'}`;
   if (colorType === 'tertiary') {
     pill.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-tertiary-container/10 border border-tertiary-container/30';
-    if (icon) icon.className = 'material-symbols-outlined text-tertiary-container text-sm';
+    if (icon) icon.innerHTML = SVG_ICONS.check_circle;
     text.className = 'text-code-sm text-tertiary font-semibold';
   } else if (colorType === 'secondary') {
     pill.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-secondary-container/20 border border-secondary/30';
-    if (icon) icon.className = 'material-symbols-outlined text-secondary text-sm animate-spin';
+    if (icon) icon.innerHTML = SVG_ICONS.running;
     text.className = 'text-code-sm text-secondary font-semibold';
   } else {
     pill.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-error-container/20 border border-error/30';
-    if (icon) icon.className = 'material-symbols-outlined text-error text-sm';
+    if (icon) icon.innerHTML = SVG_ICONS.failed;
     text.className = 'text-code-sm text-error font-semibold';
   }
 }
@@ -469,9 +469,9 @@ function renderExtractedJobs(jobs) {
       <td class="py-3.5 px-5 text-on-surface-variant">${escapeHtml(job.LOCATION || 'N/A')}</td>
       <td class="py-3.5 px-5 text-right">
         ${job.JOBLINK ? `
-          <a href="${escapeHtml(job.JOBLINK)}" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 rounded-xl bg-surface-container hover:bg-primary-container/20 text-primary-container text-code-sm border border-white/[0.08] transition-colors inline-flex items-center gap-1">
+          <a href="${escapeHtml(job.JOBLINK)}" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 rounded-xl bg-surface-container hover:bg-primary-container/20 text-primary-container text-code-sm border border-white/[0.08] transition-colors inline-flex items-center gap-1.5">
             <span>Visit Link</span>
-            <span class="material-symbols-outlined text-xs">open_in_new</span>
+            <span class="flex items-center">${SVG_ICONS.open_in_new}</span>
           </a>
         ` : '<span class="text-on-surface-variant/40">No Link</span>'}
       </td>
@@ -609,9 +609,9 @@ function switchMode(mode) {
 
   const formSingle = document.getElementById('singleJobForm');
   const formBatch = document.getElementById('batchCsvForm');
-  const tabBtnConfig = document.getElementById('tabBtnConfig');
-  const tabBtnJobs = document.getElementById('tabBtnJobs');
-  const tabBtnBatchTable = document.getElementById('tabBtnBatchTable');
+  const tabBtnConfig = document.getElementById('tabBtn_config');
+  const tabBtnJobs = document.getElementById('tabBtn_jobs');
+  const tabBtnBatchTable = document.getElementById('tabBtn_batch_table');
 
   if (mode === 'single') {
     formSingle?.classList.remove('hidden');
@@ -779,14 +779,14 @@ function setRunButtonState(isRunning) {
   if (isRunning) {
     btn.disabled = true;
     btn.innerHTML = `
-      <span class="material-symbols-outlined text-xl animate-spin">refresh</span>
+      <span class="flex items-center">${SVG_ICONS.spinner_lg}</span>
       <span>Synthesizing...</span>
     `;
     btn.classList.add('opacity-80');
   } else {
     btn.disabled = false;
     btn.innerHTML = `
-      <span class="material-symbols-outlined text-xl" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+      <span class="flex items-center">${SVG_ICONS.play_arrow}</span>
       <span>Run Pipeline</span>
       <span class="ml-1 text-code-sm px-2 py-0.5 rounded-full bg-surface-container-lowest/20 font-normal">⌘↵</span>
     `;
@@ -862,10 +862,10 @@ function showToast(message, type = 'info') {
   if (!container) return;
 
   const toast = document.createElement('div');
-  const iconName = type === 'success' ? 'check_circle' : type === 'error' ? 'error' : 'info';
+  const iconSvg = type === 'success' ? SVG_ICONS.check_lg : type === 'error' ? SVG_ICONS.error_lg : SVG_ICONS.info;
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `
-    <span class="material-symbols-outlined text-lg">${iconName}</span>
+    <span class="flex items-center">${iconSvg}</span>
     <span class="font-medium flex-1">${escapeHtml(message)}</span>
   `;
 

@@ -63,7 +63,7 @@ class ATSFingerprinter(PipelineStep):
     # ── PipelineStep interface ──────────────────────────────────────────────────
 
     def execute(self, inp: GeneratorInput, state: PipelineState) -> StepResult:
-        candidates = self.detect_candidates(inp.career_site_url, inp.integration_link)
+        candidates = self.detect_candidates(inp.career_site_url, inp.integration_link, state=state)
         state.ats_candidates = candidates
         
         if candidates:
@@ -76,7 +76,35 @@ class ATSFingerprinter(PipelineStep):
             
         return StepResult(StepSignal.CONTINUE)
 
-    def detect_candidates(self, career_url: str, integration_link: Optional[str] = None) -> list[ATSCandidate]:
+    @staticmethod
+    def _extract_iframe_urls(html_text: str, base_url: str) -> list[str]:
+        if not html_text:
+            return []
+        from urllib.parse import urljoin
+        iframe_urls: list[str] = []
+        patterns = [
+            r'<iframe\b[^>]*?\bsrc=["\']([^"\']+)["\']',
+            r'<iframe\b[^>]*?\bdata-src=["\']([^"\']+)["\']',
+            r'<iframe\b[^>]*?\bdata-url=["\']([^"\']+)["\']',
+            r'<iframe\b[^>]*?\bdata-href=["\']([^"\']+)["\']',
+            r'<iframe\b[^>]*?\bdata-target=["\']([^"\']+)["\']',
+        ]
+        for p in patterns:
+            for match in re.findall(p, html_text, re.IGNORECASE):
+                url = match.strip()
+                if url and not url.lower().startswith(("javascript:", "about:", "mailto:", "tel:", "#")):
+                    full_url = urljoin(base_url, url)
+                    if full_url not in iframe_urls:
+                        iframe_urls.append(full_url)
+        return iframe_urls
+
+    def detect_candidates(
+        self,
+        career_url: str,
+        integration_link: Optional[str] = None,
+        html_content: Optional[str] = None,
+        state: Optional[PipelineState] = None
+    ) -> list[ATSCandidate]:
         candidates = []
         
         # Helper to extract slug & URL start
@@ -113,10 +141,47 @@ class ATSFingerprinter(PipelineStep):
                         candidates.append(create_candidate(career_url, platform, "url", matched_by_integration_link=False))
                         break
 
-        # 2. Check HTML signatures
-        html = self._fetch_html(career_url)
-        if html:
-            html_lower = html.lower()
+        # 2. Check HTML content and Iframe targets (inspect both raw_static_html & rendered page_html)
+        html_sources: list[str] = []
+        if html_content:
+            html_sources.append(html_content)
+        if state:
+            if state.raw_static_html and state.raw_static_html not in html_sources:
+                html_sources.append(state.raw_static_html)
+            if state.page_html and state.page_html not in html_sources:
+                html_sources.append(state.page_html)
+
+        if not html_sources:
+            fetched_html = self._fetch_html(career_url)
+            if fetched_html:
+                html_sources.append(fetched_html)
+
+        # 2a. Discover and deduplicate all iframe URLs across all available HTML representations
+        discovered_iframe_urls: list[str] = []
+        for h in html_sources:
+            for iframe_url in self._extract_iframe_urls(h, career_url):
+                if iframe_url not in discovered_iframe_urls:
+                    discovered_iframe_urls.append(iframe_url)
+
+        # 2b. Match iframe URLs against ATS platforms
+        for iframe_url in discovered_iframe_urls:
+            for platform in self._platforms:
+                if platform.get("disabled"):
+                    continue
+                rule_name = platform.get("parent_rule_name")
+                if rule_name not in self._valid_rules:
+                    continue
+                if any(c.parent_rule_name == rule_name for c in candidates):
+                    continue
+                for sig in platform.get("url_signatures", []):
+                    if sig.lower() in iframe_url.lower():
+                        logger.info("ATSFingerprinter: Matched embedded iframe ATS %s -> %s", rule_name, iframe_url)
+                        candidates.append(create_candidate(iframe_url, platform, "iframe", matched_by_integration_link=False))
+                        break
+
+        # 2c. Check HTML signatures across the HTML sources
+        for h in html_sources:
+            html_lower = h.lower()
             for platform in self._platforms:
                 if platform.get("disabled"):
                     continue
@@ -124,7 +189,7 @@ class ATSFingerprinter(PipelineStep):
                 if rule_name not in self._valid_rules:
                     continue
                 
-                # Skip if already matched this platform by URL signature
+                # Skip if already matched this platform
                 if any(c.parent_rule_name == rule_name for c in candidates):
                     continue
                     
@@ -240,8 +305,20 @@ class ATSFingerprinter(PipelineStep):
         value  = cfg.get("value", "")
 
         if method == "path_after":
+            # 1. Check query parameter tokens like ?for=slug, ?b_token=slug, ?slug=
+            m_param = re.search(r"[?&](?:for|b_token|token|slug|company)=([^/?&#]+)", url, re.IGNORECASE)
+            if m_param:
+                return m_param.group(1)
+            # 2. Check standard path segment after domain / path
             m = re.search(rf"{re.escape(value)}/([^/?&#]+)", url, re.IGNORECASE)
-            return m.group(1) if m else None
+            if m:
+                first_seg = m.group(1)
+                if first_seg.lower() in ("embed", "jobs", "portal", "search", "candidates"):
+                    m2 = re.search(rf"{re.escape(value)}/(?:embed|jobs|portal|search|candidates)/([^/?&#]+)", url, re.IGNORECASE)
+                    if m2:
+                        return m2.group(1)
+                return first_seg
+            return None
 
         if method == "subdomain_before":
             host = urlparse(url).hostname or ""

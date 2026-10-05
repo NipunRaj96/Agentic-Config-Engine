@@ -379,6 +379,7 @@ class LLMReasoner(PipelineStep):
                     field_experience=field_map.get("field_experience"),
                     field_joblink=field_map.get("field_joblink"),
                     field_jobdesc=field_map.get("field_jobdesc"),
+                    move_to_jd=move_to_jd,
                     notes="; ".join(notes_parts),
                     confidence=0.0
                 )
@@ -449,8 +450,15 @@ class LLMReasoner(PipelineStep):
                     logger.info("LLMReasoner: JDRGX generated from %s (%d patterns)", sample_detail_urls[0], len(jd_res.jdrgx_patterns))
 
             if not (llm_result.jdjson_patterns or llm_result.jdrgx_patterns or llm_result.jdrgx):
-                logger.warning("LLMReasoner: move_to_jd=1 but no verified JDJSON or JDRGX detail extractor could be generated.")
-                return self._fallback_to_srp(inp, state, "move_to_jd=1 but detail extraction failed (no verified detail pattern).")
+                if llm_result.field_jobtitle:
+                    logger.warning(
+                        "LLMReasoner: move_to_jd=1 but no verified JDJSON or JDRGX detail extractor could be generated. "
+                        "Preserving valid JSON API listing by gracefully setting move_to_jd=0."
+                    )
+                    llm_result.move_to_jd = 0
+                else:
+                    logger.warning("LLMReasoner: move_to_jd=1 but no verified JDJSON or JDRGX detail extractor could be generated.")
+                    return self._fallback_to_srp(inp, state, "move_to_jd=1 but detail extraction failed (no verified detail pattern).")
 
         state.llm_result = llm_result
         state.detection_path = "llm"
@@ -535,28 +543,12 @@ class LLMReasoner(PipelineStep):
             return None
 
     def _fallback_to_srp(self, inp: GeneratorInput, state: PipelineState, reason: str) -> StepResult:
-        if state.source_decision:
-            logger.warning("LLM reasoning failed on resolved JSON_API source. Failing the run.")
-            state.output.tech_status = TechStatus.FAILED
-            state.output.sub_tech_comment = None
-            state.output.site_type = None
-            state.output.crawler_type = None
-            state.output.confidence = 0.0
-            state.output.tech_comments = f"LLMReasoner failed: {reason}."
-            return StepResult(StepSignal.HALT_FAIL, reason="llm-json-api-failed")
-
-        logger.warning("LLM reasoning failed. Reclassifying as SRP to attempt XPath generation.")
-        state.is_srp = True
-        state.detection_path = "srp"
+        logger.warning("LLM reasoning failed (%s). Falling back to HTML regex / SRP generation.", reason)
+        state.detection_path = "unknown"
+        state.source_decision = None
         state.candidates = []  # Clear candidates since JSON API validation failed
-        out = state.output
-        out.site_type    = SiteType.SRP
-        out.crawler_type = CrawlerType.SRPAUTOMATION
-        out.tech_status      = TechStatus.DONE
-        out.sub_tech_comment = SubTechComment.JOBS_NEW_POOL
-        out.tech_comments    = f"LLMReasoner failed validation: {reason}. Reclassifying as SRP — continuing to XPathSRPGenerator."
-        out.confidence = 0.0
-        return StepResult(StepSignal.CONTINUE, reason="llm-fail-srp-fallback")
+        state.failed_json_attempts.append({"reason": reason})
+        return StepResult(StepSignal.CONTINUE, reason="llm-fail-html-fallback")
 
     def _fetch_endpoint_statically(
         self,
@@ -891,7 +883,35 @@ class LLMReasoner(PipelineStep):
         # Check unique IDs explicitly as a JSON API specific integrity check
         ids = [j.get("JOBID", "") for j in job_objects if j.get("JOBID")]
         if len(ids) > 1 and len(set(ids)) != len(ids):
-            return False, f"Job IDs are not unique: {ids} (likely invalid ID field mapping)", {}
+            # Attempt automated self-healing by searching for true unique ID fields in raw items
+            healed = False
+            try:
+                data = json.loads(resp_text.strip())
+                raw_jobs = find_jobs_array(data) if isinstance(data, (dict, list)) else []
+                if raw_jobs and isinstance(raw_jobs[0], dict):
+                    first_item = raw_jobs[0]
+                    id_candidates = [
+                        "ID", "id", "_id", "Id", "id_", "jobId", "job_id", "requisitionId",
+                        "reqId", "requisition_id", "req_id", "slug", "code", "jobCode",
+                        "job_code", "JDCode", "JDSequence", "seq", "referenceNumber", "ref"
+                    ]
+                    for cand_key in id_candidates:
+                        if cand_key in first_item and cand_key != llm_result.field_jobid:
+                            cand_vals = [str(get_field_val(rj, cand_key)) for rj in raw_jobs if get_field_val(rj, cand_key) is not None]
+                            if len(cand_vals) == len(raw_jobs) and len(set(cand_vals)) == len(cand_vals):
+                                logger.info("Self-healed duplicate JOBID mapping '%s' -> unique field '%s'", llm_result.field_jobid, cand_key)
+                                llm_result.field_jobid = cand_key
+                                jperl_cfg = compiler.from_llm(inp, llm_result, mock_cand, enforce_jd_consistency=False)
+                                job_objects = ReplayEngine.run(jperl_cfg.body, api_response=resp_text, base_url=inp.career_site_url)
+                                ids = [j.get("JOBID", "") for j in job_objects if j.get("JOBID")]
+                                if len(ids) > 1 and len(set(ids)) == len(ids):
+                                    healed = True
+                                    break
+            except Exception as heal_err:
+                logger.debug("Automated ID healing failed: %s", heal_err)
+
+            if not healed and len(ids) > 1 and len(set(ids)) != len(ids):
+                return False, f"Job IDs are not unique: {ids} (likely invalid ID field mapping)", {}
 
         # 3. Universal semantic checks
         is_valid, err_msg = validate_job_objects(job_objects, expected_count=0)

@@ -27,6 +27,7 @@ import requests
 
 from src.jd_extractor import JDExtractor
 from src.llm_client import LLMClient
+from src.pagination_detector import PaginationDetector
 from src.models import (
     CrawlerType,
     GeneratorInput,
@@ -190,12 +191,16 @@ Rules:
   1. Capture `LOCATION` and `EXPERIENCE` ONLY if they exist as distinct, structured metadata badges, table cells, or JSON attributes in the raw document (e.g. `<td>10yrs+</td>`, `<span class="location">`, `"City": "..."`, `"Work_Experience": "..."`).
   2. If `LOCATION` or `EXPERIENCE` is NOT present as a distinct structured tag/key on the page, OMIT them completely from `LOCRGXSEQ`. Never invent, guess, or force-create a field from narrative text or sentences.
   3. Never slice `EXPERIENCE` or `LOCATION` out of an unstructured job description or paragraph. If experience/location is mentioned within a paragraph or list of requirements, leave it inside `JOBDESC` (never split or truncate `JOBDESC`).
+  4. Always capture clean inner text only (e.g. `>([^<]+)<` or `>\s*([^<]+?)\s*<`). NEVER capture enclosing HTML tags (`<span...>`, `<div>`) inside `JOBTITLE`, `LOCATION`, or `EXPERIENCE`.
 - JOBLINK & MOVE_TO_JD Priority Rules:
   1. Priority 1 (JOBLINK): If job detail links/pages exist (or the site provides unique job link paths/IDs like Zoho Recruit), ALWAYS capture the link/id into JOBLINK and set `move_to_jd=1`.
   2. Priority 2: If the full job description is already fully visible inline on the listing page card/accordion, capture it into `JOBDESC` and set `move_to_jd=0`.
   3. Priority 3: If jobs are displayed statically on a single page with no individual detail links/pages (and no separate detail URLs exist), omit JOBLINK, capture visible fields, and set `move_to_jd=0`.
 - max_pages: "1" if single page, "3" if pagination detected.
 - confidence: 0.9 if you can clearly see ≥2 repeating job elements; 0.5 if structure is unclear; 0.2 if guessing.
+- **Single-Page / Paginated Batch Awareness**:
+  1. The HTML snippet represents the current listing page/batch (typically 10-25 jobs). Matching the repeating job structures on this page is expected.
+  2. Do NOT broaden the pattern to match non-job headers, footers, or navigation items.
 - **Write robust and flexible regex patterns**:
   1. Use `<tag[^>]*>` instead of `<tag>` (e.g. use `<h2[^>]*>` instead of `<h2>`, `<a[^>]*>` instead of `<a>`, `<div[^>]*>` instead of `<div>`).
   2. Handle dynamic or varying classes/IDs using wildcards: `<div[^>]*class="[^"]*your_class[^"]*"[^>]*>`.
@@ -205,8 +210,8 @@ Rules:
 """
 
 _RETRY_PROMPT_TEMPLATE = """\
-You are an expert web scraping and JPERL configuration engineer.
-Your previous regex failed. Please fix it.
+You are an expert JPERL config engineer. Your previous extraction attempt failed.
+Do NOT simply tweak the previous pattern. First DIAGNOSE the source representation, choose the right strategy, and generate the pattern.
 
 Career site URL: {career_url}
 HTML source URL: {source_url}
@@ -220,17 +225,28 @@ HTML snippet (truncated):
 {html_snippet}
 ---
 
-Rules:
-1. Fix the regular expression so that it matches every job listing in the HTML snippet.
-2. Ensure capture groups match the sequence given in locrgxseq.
-3. MOVE_TO_JD decision:
-   - If individual job detail links/pages exist (e.g. href or job URL/ID) -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
-   - If full job description is inline in the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
-4. If the HTML contains clean JSON data, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq".
-5. Ensure the pattern ends immediately at the URL/href quote (e.g. href="([^"]+)").
-6. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
+DIAGNOSTIC WORKFLOW:
+1. DIAGNOSE SOURCE REPRESENTATION:
+   - Type A (HTML DOM): Repeating HTML elements (<div class="job-card">, <tr>, <li>).
+   - Type B (Embedded / Serialized JSON): Look for <script type="application/ld+json">, <script id="__NEXT_DATA__">, window.__INITIAL_STATE__, or var jobs = [...].
+   - Type C (Escaped JSON): Look for &quot;Posting_Title&quot;, &#34;title&#34;, or \\"title\\": \\"...\\".
+   - Type D (Data Attributes): Look for data-job="..." or hidden inputs.
 
-Return ONLY valid JSON:
+2. CHOOSE STRATEGY:
+   - If clean JSON structure exists -> Return "locjson" and "locjsonseq".
+   - If embedded/escaped JSON or JS state -> Write "locrgx" targeting JSON key-value patterns (e.g. (?s)"title":\\s*"([^"]+)").
+   - If HTML DOM -> Write "locrgx" anchoring to explicit tags.
+
+3. REPAIR SPECIFIC FAILURE:
+   - If previous error was "0 matches / No jobs extracted": Do NOT broaden regex; check if data lives in <script> or JSON blocks.
+   - If previous error was "LOCATION/EXPERIENCE too long or contains HTML": Match innermost text (>([^<]+)<) or OMIT optional fields (LOCATION/EXPERIENCE/Date) from locrgxseq.
+   - If previous error was "Capture groups count mismatch": Ensure every capture group (...) has exactly one matching field in locrgxseq.
+
+4. MOVE_TO_JD:
+   - If detail links/pages or unique IDs exist -> capture JOBLINK in sequence and set move_to_jd=1.
+   - If full description is inline or single page -> set move_to_jd=0.
+
+Return ONLY valid JSON (no markdown, no prose):
 {{
   "locrgx": "(?s)<PCRE pattern with capture groups>",
   "locrgxseq": "COMMA_SEPARATED_FIELDS",
@@ -241,7 +257,8 @@ Return ONLY valid JSON:
 """
 
 _RETRY_1_PROMPT_TEMPLATE = """\
-You are a JPERL config engineer at Naukri. Your previous regular expression failed verification.
+You are an expert JPERL config engineer. Your previous extraction attempt failed verification.
+Do NOT simply tweak the previous pattern. First DIAGNOSE the source representation, choose the right strategy, and generate the pattern.
 
 Career site URL: {career_url}
 HTML source URL: {source_url}
@@ -255,15 +272,26 @@ Pattern: {failed_pattern}
 Sequence: {failed_seq}
 Validation Result: match_count = {failed_matches}, error = {failed_error}
 
-DIAGNOSTIC INSTRUCTION:
-The previous regex failed validation. Do NOT blindly modify it or copy failed values. Inspect the raw HTTP HTML and determine exactly why the previous pattern produced incorrect/zero matches. Identify the actual job-list structure, encoding, delimiters, repeated boundaries, and fields present in the raw response. Generate a corrected regex based ONLY on the raw HTML.
-(If the raw HTML contains structured JSON better suited for LOCJSON, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq").
+DIAGNOSTIC WORKFLOW:
+1. DIAGNOSE SOURCE REPRESENTATION:
+   - Type A (HTML DOM): Repeating HTML elements (<div class="job-card">, <tr>, <li>).
+   - Type B (Embedded / Serialized JSON): Look for <script type="application/ld+json">, <script id="__NEXT_DATA__">, window.__INITIAL_STATE__, or var jobs = [...].
+   - Type C (Escaped JSON): Look for &quot;Posting_Title&quot;, &#34;title&#34;, or \\"title\\": \\"...\\".
+   - Type D (Data Attributes): Look for data-job="..." or hidden inputs.
 
-DECISION RULES:
-1. Ensure capture groups match the sequence given in locrgxseq.
-2. If distinct job detail links/pages exist -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
-3. If full job description is inline on the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
-4. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
+2. CHOOSE STRATEGY:
+   - If clean JSON structure exists -> Return "locjson" and "locjsonseq".
+   - If embedded/escaped JSON or JS state -> Write "locrgx" targeting JSON key-value patterns (e.g. (?s)"title":\\s*"([^"]+)").
+   - If HTML DOM -> Write "locrgx" anchoring to explicit tags.
+
+3. REPAIR SPECIFIC FAILURE:
+   - If previous error was "0 matches / No jobs extracted": Do NOT broaden regex; check if data lives in <script> or JSON blocks.
+   - If previous error was "LOCATION/EXPERIENCE too long or contains HTML": Match innermost text (>([^<]+)<) or OMIT optional fields (LOCATION/EXPERIENCE/Date) from locrgxseq.
+   - If previous error was "Capture groups count mismatch": Ensure every capture group (...) has exactly one matching field in locrgxseq.
+
+4. MOVE_TO_JD:
+   - If detail links/pages or unique IDs exist -> capture JOBLINK in sequence and set move_to_jd=1.
+   - If full description is inline or single page -> set move_to_jd=0.
 
 Return ONLY a valid JSON object — no markdown, no prose, no explanation:
 {{
@@ -276,7 +304,8 @@ Return ONLY a valid JSON object — no markdown, no prose, no explanation:
 """
 
 _RETRY_2_PROMPT_TEMPLATE = """\
-You are a JPERL config engineer at Naukri. Your previous two regular expression attempts failed verification.
+You are an expert JPERL config engineer. Your previous TWO extraction attempts failed verification.
+Treat both previous attempts as failed hypotheses. Re-analyze the target payload from first principles and pivot to an alternative representation.
 
 Career site URL: {career_url}
 HTML source URL: {source_url}
@@ -285,24 +314,22 @@ HTML (truncated to {html_len} chars):
 {html_snippet}
 ---
 
-PREVIOUS ATTEMPTS:
-Attempt 1:
-Pattern: {attempt1_pattern} (seq: {attempt1_seq})
-Validation Result: match_count = {attempt1_matches}, error = {attempt1_error}
+FAILED ATTEMPTS:
+Attempt 1: Pattern: {attempt1_pattern} (seq: {attempt1_seq}) -> Result: matches={attempt1_matches}, error={attempt1_error}
+Attempt 2: Pattern: {attempt2_pattern} (seq: {attempt2_seq}) -> Result: matches={attempt2_matches}, error={attempt2_error}
 
-Attempt 2:
-Pattern: {attempt2_pattern} (seq: {attempt2_seq})
-Validation Result: match_count = {attempt2_matches}, error = {attempt2_error}
+ADVANCED FORENSIC PIVOT:
+1. PIVOT SOURCE REPRESENTATION:
+   - If both previous attempts targeted HTML tags and got 0 matches, the jobs are almost certainly inside a <script> block, application/ld+json, __NEXT_DATA__, JS array, or HTML-escaped JSON (&quot;). Target the serialized data instead!
+   - If previous attempts extracted HTML tags into fields, target innermost clean text (>([^<]+)<) or remove optional secondary fields (EXPERIENCE, LOCATION, Date) to retain only JOBTITLE and JOBLINK.
 
-ADVANCED FORENSIC INSTRUCTION:
-The previous regex attempts failed. Treat them as failed hypotheses. Compare both previous patterns against the raw HTTP payload and determine why they failed. Do not repeat the same strategy. Re-analyze the raw HTML structure from first principles, including HTML entity encoding, escaped JSON, repeated job boundaries, attribute structure, and greedy/non-greedy behavior. Generate a new regex that can be validated directly against the raw HTTP response.
-(If the raw HTML contains structured JSON better suited for LOCJSON, you may return "locjson" and "locjsonseq" instead of "locrgx" and "locrgxseq").
+2. CHOOSE STRATEGY:
+   - If JSON format -> Output "locjson" + "locjsonseq".
+   - If Regex format -> Output "locrgx" + "locrgxseq".
 
-DECISION RULES:
-1. Ensure capture groups match the sequence given in locrgxseq.
-2. If distinct job detail links/pages exist -> ALWAYS capture JOBLINK in locrgxseq and set `move_to_jd=1`.
-3. If full job description is inline on the listing card (capture as JOBDESC) or no separate detail pages exist -> set `move_to_jd=0`.
-4. Do NOT copy values from previous failed attempts or few-shot examples; reason directly from the target HTML snippet.
+3. STRICT ALIGNMENT:
+   - Exactly one capture group (...) per field in locrgxseq.
+   - Set move_to_jd=1 if detail links exist (capture JOBLINK); else move_to_jd=0.
 
 Now generate Attempt 3. Return ONLY a valid JSON object — no markdown, no prose, no explanation:
 {{
@@ -353,25 +380,16 @@ class LOCRGXGenerator(PipelineStep):
     # ── PipelineStep interface ──────────────────────────────────────────────────
 
     def execute(self, inp: GeneratorInput, state: PipelineState) -> StepResult:
-        # Check SourceResolver decision
+        # Check SourceResolver decision — skip only if already handled by ATS or JSON API
         if state.source_decision:
-            if state.source_decision.source != SourceType.STATIC_HTML:
-                logger.info("LOCRGXGenerator: skipping — source is not STATIC_HTML")
+            if state.source_decision.source in (SourceType.ATS, SourceType.JSON_API) and state.detection_path in ("ats", "llm"):
+                logger.info("LOCRGXGenerator: skipping — already handled by %s", state.detection_path)
                 return StepResult(StepSignal.CONTINUE)
         else:
             # Skip if already handled by ATS fingerprinter (backward compatibility fallback)
             if state.detection_path == "ats":
                 logger.info("LOCRGXGenerator: skipping — already handled by ATSFingerprinter")
                 return StepResult(StepSignal.CONTINUE)
-
-            # Skip if JSON API site (backward compatibility fallback)
-            if state.candidates:
-                from src.llm_reasoner import LLMReasoner
-                if not LLMReasoner._all_candidates_are_noise(state.candidates):
-                    logger.info("LOCRGXGenerator: skipping — state.candidates is non-empty (JSON API site), deferring to LLMReasoner")
-                    return StepResult(StepSignal.CONTINUE)
-                else:
-                    logger.info("LOCRGXGenerator: candidates are present but all are analytics/CMS noise. Proceeding to HTML regex generation.")
 
         # Skip if no HTML data available at all
         if not state.page_html and not state.html_candidates and not state.raw_static_html:
@@ -486,7 +504,7 @@ class LOCRGXGenerator(PipelineStep):
                 )
                 matches = len(job_list)
 
-            is_jd_complete = self._check_jd_completeness(result, matches, ground_truth_html, inp.career_site_url)
+            is_jd_complete = self._check_jd_completeness(result, matches, ground_truth_html, inp.career_site_url, job_list=job_list)
             if not is_jd_complete:
                 is_valid = False
                 err_msg = (
@@ -506,8 +524,8 @@ class LOCRGXGenerator(PipelineStep):
             current_attempt_record = {
                 "attempt": attempt,
                 "type": "locjson" if result.locjson else "locrgx",
-                "pattern": result.locjson if result.locjson else (result.locrgx or ""),
-                "seq": result.locjsonseq if result.locjsonseq else (result.locrgxseq or ""),
+                "pattern": str(result.locjson if result.locjson else (result.locrgx or "")),
+                "seq": str(result.locjsonseq if result.locjsonseq else (result.locrgxseq or "")),
                 "matches": matches,
                 "error": err_msg if not is_valid else "OK",
             }
@@ -536,7 +554,7 @@ class LOCRGXGenerator(PipelineStep):
             )
             state.output.tech_comments = (
                 f"LOCRGXGenerator: static extraction failed after {len(attempts_history)} attempts. "
-                f"History: {json.dumps(attempts_history)}. "
+                f"History: {json.dumps(attempts_history, default=str)}. "
                 "Rejecting static JPERL path and falling back to XPath browser automation."
             )
             # Route to SRPAUTOMATION
@@ -551,7 +569,7 @@ class LOCRGXGenerator(PipelineStep):
                 sample_urls = [j.get("JOBLINK", "").strip() for j in job_list if j.get("JOBLINK")]
             else:
                 sample_urls = self._extract_sample_job_urls(
-                    result.locrgx or "", result.locrgxseq or "", ground_truth_html, inp.career_site_url, state=state
+                    result.locrgx or "", result.locrgxseq or "", ground_truth_html, inp.career_site_url, state=state, job_list=job_list
                 )
 
             if sample_urls:
@@ -581,17 +599,25 @@ class LOCRGXGenerator(PipelineStep):
                 )
 
             if not (result.jdrgx or result.jdrgx_patterns or result.jdjson_patterns):
-                logger.warning(
-                    "LOCRGXGenerator: move_to_jd=1 but no verified JDRGX or JDJSON detail pattern could be extracted. Falling back to XPath/browser automation."
-                )
-                state.output.tech_comments = (
-                    "LOCRGXGenerator: move_to_jd=1 but no verified JDRGX or JDJSON detail pattern could be extracted. "
-                    "Falling back to XPath browser automation."
-                )
-                state.is_srp = True
-                if state.source_decision:
-                    state.source_decision.source = SourceType.RENDERED_DOM
-                return StepResult(StepSignal.CONTINUE, reason="jd-extraction-failed-fallback-to-srp")
+                if matches >= 3:
+                    logger.warning(
+                        "LOCRGXGenerator: move_to_jd=1 but detail page fetch/extraction yielded no JDRGX pattern (detail link may be external apply form or unreachable). "
+                        "Adjusting config to move_to_jd=0 to retain %d verified listing job(s).",
+                        matches
+                    )
+                    result.move_to_jd = 0
+                else:
+                    logger.warning(
+                        "LOCRGXGenerator: move_to_jd=1 but no verified JDRGX or JDJSON detail pattern could be extracted. Falling back to XPath/browser automation."
+                    )
+                    state.output.tech_comments = (
+                        "LOCRGXGenerator: move_to_jd=1 but no verified JDRGX or JDJSON detail pattern could be extracted. "
+                        "Falling back to XPath browser automation."
+                    )
+                    state.is_srp = True
+                    if state.source_decision:
+                        state.source_decision.source = SourceType.RENDERED_DOM
+                    return StepResult(StepSignal.CONTINUE, reason="jd-extraction-failed-fallback-to-srp")
 
         # ── Build final LOCRGXResult ───────────────────────────────────────────
         final = LOCRGXResult(
@@ -645,35 +671,103 @@ class LOCRGXGenerator(PipelineStep):
     ) -> tuple[str, Optional[str], str, dict, Optional[str]]:
         """
         Returns (html_body, source_url, method, request_headers, request_body).
-        Priority: highest-scoring HTML XHR candidate → raw static HTML → rendered page HTML.
+        Priority: highest-scoring HTML XHR candidate (preferring paginated endpoints) → raw static HTML → rendered page HTML.
         """
+        noise_patterns = [
+            "cart", "checkout", "product", "account", "wishlist", "contact", 
+            "about", "blog", "news", "event", "telemetry", "analytics", 
+            "facebook", "google", "hotjar", "tawk", "clarity", "snapchat", 
+            "search?type=product", "search?q=", "popup", "banner", "cookie",
+            ".js", ".css", "widget", "nopaperforms"
+        ]
         valid_candidates = []
-        for c in candidates:
+        for c in (candidates or []):
             url_lower = c.url.lower()
-            noise_patterns = [
-                "cart", "checkout", "product", "account", "wishlist", "contact", 
-                "about", "blog", "news", "event", "telemetry", "analytics", 
-                "facebook", "google", "hotjar", "tawk", "clarity", "snapchat", 
-                "search?type=product", "search?q=", "popup", "banner", "cookie"
-            ]
-            if not any(p in url_lower for p in noise_patterns):
+            if not any(p in url_lower for p in noise_patterns) and c.job_signal_score >= 2:
                 valid_candidates.append(c)
 
+        # Safety Net: if html_candidates missed it, check state.captured for 2xx HTML responses with pagination
+        if not valid_candidates and state and state.captured:
+            for req in state.captured:
+                if req.response_status and 200 <= req.response_status < 300 and req.response_body:
+                    ct = req.response_headers.get("content-type", "").lower()
+                    url_lower = req.url.lower()
+                    if ("text/html" in ct or "<div" in req.response_body or "<table" in req.response_body) and not any(p in url_lower for p in noise_patterns):
+                        param_info = PaginationDetector.detect_and_parametrize({
+                            "url": req.url,
+                            "method": req.method,
+                            "request_body": req.request_body,
+                            "request_headers": req.request_headers,
+                        })
+                        if param_info:
+                            valid_candidates.append(HTMLCandidate(
+                                url=req.url,
+                                method=req.method,
+                                request_headers=req.request_headers,
+                                request_body=req.request_body,
+                                html_body=req.response_body,
+                                job_signal_score=20,
+                            ))
+
         if valid_candidates:
-            best = valid_candidates[0]   # already sorted desc by job_signal_score
+            # Sort candidates prioritizing paginated endpoints first, then job_signal_score
+            def _cand_sort_key(c: HTMLCandidate) -> tuple[int, int]:
+                param_info = PaginationDetector.detect_and_parametrize({
+                    "url": c.url,
+                    "method": c.method,
+                    "request_body": c.request_body,
+                    "request_headers": c.request_headers,
+                })
+                has_pag = 1 if param_info is not None else 0
+                return (has_pag, c.job_signal_score)
+
+            valid_candidates.sort(key=_cand_sort_key, reverse=True)
+            best = valid_candidates[0]
             logger.info(
-                "LOCRGXGenerator: using HTML XHR candidate (score=%d) %s",
+                "LOCRGXGenerator: analyzing HTML XHR candidate (score=%d) %s",
                 best.job_signal_score, best.url,
             )
+            # Detect pagination parameters and parameterize with JPERL token
+            param_info = PaginationDetector.detect_and_parametrize({
+                "url": best.url,
+                "method": best.method,
+                "request_body": best.request_body,
+                "request_headers": best.request_headers,
+            })
+            if param_info:
+                logger.info(
+                    "LOCRGXGenerator: parameterized pagination (%s in %s) -> URL: %s, POST: %s",
+                    param_info.param_name, param_info.location,
+                    param_info.parameterized_url, param_info.parameterized_body
+                )
+                return (
+                    best.html_body,
+                    param_info.parameterized_url,
+                    param_info.original_method,
+                    param_info.headers,
+                    param_info.parameterized_body,
+                )
+
             return best.html_body, best.url, best.method, best.request_headers, best.request_body
 
-        if state and state.raw_static_html:
-            logger.info("LOCRGXGenerator: using raw_static_html from static fetch")
-            return state.raw_static_html, career_url, "GET", {}, None
+        # Check if landing URL has pagination parameter in query or path
+        landing_param_info = PaginationDetector.detect_and_parametrize({
+            "url": career_url,
+            "method": "GET",
+        })
+        effective_career_url = landing_param_info.parameterized_url if landing_param_info else career_url
 
-        # Fallback: use rendered page HTML, URL = career_site_url
-        logger.info("LOCRGXGenerator: no HTML XHR — using rendered page_html")
-        return page_html or "", career_url, "GET", {}, None
+        is_rendered_dom = (
+            state and state.source_decision and state.source_decision.source == SourceType.RENDERED_DOM
+        )
+
+        if state and state.raw_static_html and not is_rendered_dom:
+            logger.info("LOCRGXGenerator: using raw_static_html from static fetch")
+            return state.raw_static_html, effective_career_url, "GET", {}, None
+
+        # Fallback: use rendered page HTML, URL = effective_career_url
+        logger.info("LOCRGXGenerator: no HTML XHR (or RENDERED_DOM SPA) — using rendered page_html")
+        return page_html or "", effective_career_url, "GET", {}, None
 
     @staticmethod
     def _trim_html(html: str, source_url: Optional[str] = None, state: Optional[PipelineState] = None) -> str:
@@ -983,21 +1077,13 @@ class LOCRGXGenerator(PipelineStep):
     @staticmethod
     def _validate_regex(pattern: str, html: str) -> int:
         """Returns number of matches. 0 = reject."""
-        # Safety check: prevent catastrophic backtracking from repeating wildcard groups
-        if re.search(r'\([^\)]*\.\*.*?\)[*+?]', pattern):
-            logger.warning(
-                "LOCRGXGenerator: rejected regex pattern '%s' due to high risk of catastrophic backtracking (nested repeating wildcard group).",
-                pattern[:100]
-            )
-            return 0
         try:
             from src.extraction.regex_parser import safe_regex_findall
-            compiled = re.compile(pattern, re.DOTALL)
-            return len(safe_regex_findall(compiled, html, timeout_s=2.0))
+            return len(safe_regex_findall(pattern, html, timeout_s=2.0))
         except TimeoutError:
             logger.warning("LOCRGXGenerator: regex validation timed out (>2.0s): %s", pattern[:80])
             return 0
-        except re.error as exc:
+        except Exception as exc:
             logger.warning("LOCRGXGenerator: invalid regex (%s): %s", exc, pattern[:80])
             return 0
 
@@ -1021,7 +1107,14 @@ class LOCRGXGenerator(PipelineStep):
             
         return True
 
-    def _check_jd_completeness(self, result: _LLMRegexOutput, matches: int, unescaped_html: str, career_url: str) -> bool:
+    def _check_jd_completeness(
+        self,
+        result: _LLMRegexOutput,
+        matches: int,
+        unescaped_html: str,
+        career_url: str,
+        job_list: Optional[list[dict]] = None
+    ) -> bool:
         if matches == 0 or result.move_to_jd == 1:
             return True
         seq = result.locjsonseq if result.locjson else (result.locrgxseq or "")
@@ -1031,29 +1124,45 @@ class LOCRGXGenerator(PipelineStep):
         captured_jd = None
         
         if result.locrgx:
-            raw_matches = re.findall(re.compile(result.locrgx, re.DOTALL), unescaped_html)
-            if not raw_matches:
-                return True
-            first = raw_matches[0]
-            
-            # Check JOBLINK
-            if "JOBLINK" in fields:
-                jl_idx = fields.index("JOBLINK")
-                raw_link = first[jl_idx] if isinstance(first, tuple) and jl_idx < len(first) else (first if jl_idx == 0 else None)
-                if raw_link:
-                    raw_link = str(raw_link).strip()
-                    if raw_link and not raw_link.startswith("#") and not raw_link.lower().startswith("javascript:") and not raw_link.lower().startswith("mailto:"):
-                        jd_url = urljoin(career_url, raw_link)
-                        parsed_career = urlparse(career_url)
-                        parsed_jd = urlparse(jd_url)
-                        is_distinct = (parsed_jd.netloc != parsed_career.netloc) or (parsed_jd.path.strip("/") != parsed_career.path.strip("/"))
-                        if is_distinct and parsed_jd.path.strip("/") != "":
-                            has_distinct_joblink = True
-            
-            # Check JOBDESC
-            if "JOBDESC" in fields:
-                jd_idx = fields.index("JOBDESC")
-                captured_jd = first[jd_idx] if isinstance(first, tuple) and jd_idx < len(first) else (first if jd_idx == 0 else None)
+            if job_list:
+                first = job_list[0]
+                raw_link = first.get("JOBLINK", "").strip()
+                if raw_link and not raw_link.startswith("#") and not raw_link.lower().startswith("javascript:") and not raw_link.lower().startswith("mailto:"):
+                    jd_url = urljoin(career_url, raw_link)
+                    parsed_career = urlparse(career_url)
+                    parsed_jd = urlparse(jd_url)
+                    is_distinct = (parsed_jd.netloc != parsed_career.netloc) or (parsed_jd.path.strip("/") != parsed_career.path.strip("/"))
+                    if is_distinct and parsed_jd.path.strip("/") != "":
+                        has_distinct_joblink = True
+                captured_jd = first.get("JOBDESC")
+            else:
+                from src.extraction.regex_parser import safe_regex_findall
+                try:
+                    raw_matches = safe_regex_findall(result.locrgx, unescaped_html, timeout_s=2.0)
+                except Exception:
+                    raw_matches = []
+                if not raw_matches:
+                    return True
+                first = raw_matches[0]
+                
+                # Check JOBLINK
+                if "JOBLINK" in fields:
+                    jl_idx = fields.index("JOBLINK")
+                    raw_link = first[jl_idx] if isinstance(first, tuple) and jl_idx < len(first) else (first if jl_idx == 0 else None)
+                    if raw_link:
+                        raw_link = str(raw_link).strip()
+                        if raw_link and not raw_link.startswith("#") and not raw_link.lower().startswith("javascript:") and not raw_link.lower().startswith("mailto:"):
+                            jd_url = urljoin(career_url, raw_link)
+                            parsed_career = urlparse(career_url)
+                            parsed_jd = urlparse(jd_url)
+                            is_distinct = (parsed_jd.netloc != parsed_career.netloc) or (parsed_jd.path.strip("/") != parsed_career.path.strip("/"))
+                            if is_distinct and parsed_jd.path.strip("/") != "":
+                                has_distinct_joblink = True
+                
+                # Check JOBDESC
+                if "JOBDESC" in fields:
+                    jd_idx = fields.index("JOBDESC")
+                    captured_jd = first[jd_idx] if isinstance(first, tuple) and jd_idx < len(first) else (first if jd_idx == 0 else None)
 
         if "JOBDESC" not in fields:
             # If no JOBDESC in listing, but distinct job detail links exist -> reject move_to_jd=0, require move_to_jd=1
@@ -1070,48 +1179,85 @@ class LOCRGXGenerator(PipelineStep):
 
     @staticmethod
     def _extract_sample_job_urls(
-        locrgx: str, locrgxseq: str, html: str, career_url: str, max_samples: int = 3, state: Optional[PipelineState] = None
+        locrgx: str,
+        locrgxseq: str,
+        html: str,
+        career_url: str,
+        max_samples: int = 3,
+        state: Optional[PipelineState] = None,
+        job_list: Optional[list[dict]] = None
     ) -> list[str]:
         """Extract up to max_samples JOBLINK URLs from the regex matches to fetch sample JD pages."""
         try:
-            fields = [f.strip() for f in locrgxseq.split(",") if f.strip()]
             urls: list[str] = []
 
-            # 1. If JOBLINK is in fields
-            if "JOBLINK" in fields:
-                jl_idx = fields.index("JOBLINK")
-                matches = re.findall(re.compile(locrgx, re.DOTALL), html)
-                for m in matches[:max_samples]:
-                    raw_link = m[jl_idx] if isinstance(m, tuple) else m
-                    raw_link = str(raw_link).strip()
-                    if raw_link:
+            # 1. Direct extraction from already parsed job_list
+            if job_list:
+                for j in job_list[:max_samples * 2]:
+                    raw_link = j.get("JOBLINK", "").strip()
+                    if raw_link and not raw_link.startswith(("#", "javascript:", "mailto:")):
                         if raw_link.isdigit() and len(raw_link) >= 10:
                             full_url = urljoin(career_url, f"/jobs/Careers/{raw_link}")
                         else:
                             full_url = raw_link if raw_link.startswith("http") else urljoin(career_url, raw_link)
                         if full_url not in urls:
                             urls.append(full_url)
-                if urls:
-                    return urls
+                        if len(urls) >= max_samples:
+                            return urls
 
-            # 2. If JOBID is in fields
-            if "JOBID" in fields:
-                jid_idx = fields.index("JOBID")
-                matches = re.findall(re.compile(locrgx, re.DOTALL), html)
-                for m in matches[:max_samples]:
-                    raw_id = m[jid_idx] if isinstance(m, tuple) else m
-                    raw_id = str(raw_id).strip()
+                    # Try fallback to numeric or zohorecruit JOBID
+                    raw_id = j.get("JOBID", "").strip()
                     if raw_id:
                         if "zohorecruit" in career_url or "jobs/Careers" in career_url or (raw_id.isdigit() and len(raw_id) >= 10):
                             full_url = urljoin(career_url, f"/jobs/Careers/{raw_id}")
-                        elif "/" in raw_id or raw_id.startswith("http"):
-                            full_url = raw_id if raw_id.startswith("http") else urljoin(career_url, raw_id)
-                        else:
-                            full_url = urljoin(career_url, raw_id)
-                        if full_url not in urls:
-                            urls.append(full_url)
+                            if full_url not in urls:
+                                urls.append(full_url)
+                        if len(urls) >= max_samples:
+                            return urls
                 if urls:
-                    return urls
+                    return urls[:max_samples]
+
+            fields = [f.strip() for f in locrgxseq.split(",") if f.strip()]
+            from src.extraction.regex_parser import safe_regex_findall
+
+            # 2. Fallback to safe_regex_findall with timeout
+            if locrgx and ("JOBLINK" in fields or "JOBID" in fields):
+                try:
+                    matches = safe_regex_findall(locrgx, html, timeout_s=2.0)
+                except Exception:
+                    matches = []
+
+                if "JOBLINK" in fields and matches:
+                    jl_idx = fields.index("JOBLINK")
+                    for m in matches[:max_samples]:
+                        raw_link = m[jl_idx] if isinstance(m, tuple) and jl_idx < len(m) else (m if jl_idx == 0 else "")
+                        raw_link = str(raw_link).strip()
+                        if raw_link:
+                            if raw_link.isdigit() and len(raw_link) >= 10:
+                                full_url = urljoin(career_url, f"/jobs/Careers/{raw_link}")
+                            else:
+                                full_url = raw_link if raw_link.startswith("http") else urljoin(career_url, raw_link)
+                            if full_url not in urls:
+                                urls.append(full_url)
+                    if urls:
+                        return urls[:max_samples]
+
+                if "JOBID" in fields and matches:
+                    jid_idx = fields.index("JOBID")
+                    for m in matches[:max_samples]:
+                        raw_id = m[jid_idx] if isinstance(m, tuple) and jid_idx < len(m) else (m if jid_idx == 0 else "")
+                        raw_id = str(raw_id).strip()
+                        if raw_id:
+                            if "zohorecruit" in career_url or "jobs/Careers" in career_url or (raw_id.isdigit() and len(raw_id) >= 10):
+                                full_url = urljoin(career_url, f"/jobs/Careers/{raw_id}")
+                            elif "/" in raw_id or raw_id.startswith("http"):
+                                full_url = raw_id if raw_id.startswith("http") else urljoin(career_url, raw_id)
+                            else:
+                                full_url = urljoin(career_url, raw_id)
+                            if full_url not in urls:
+                                urls.append(full_url)
+                    if urls:
+                        return urls[:max_samples]
 
             # 3. Check state sample_jobs
             if state and state.source_decision and state.source_decision.sample_jobs:
@@ -1203,10 +1349,10 @@ class _LLMRegexOutput:
         locrgx,
         locrgxseq,
         move_to_jd,
-        jdrgx,
-        jdrgxseq,
-        max_pages,
-        confidence,
+        max_pages="1",
+        confidence=0.90,
+        jdrgx=None,
+        jdrgxseq=None,
         locjson=None,
         locjsonseq=None,
         jdrgx_patterns=None,

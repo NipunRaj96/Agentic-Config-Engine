@@ -268,5 +268,15 @@
     "url_start_extract": null,
     "robots_blocked": true,
     "notes": "Robots.txt blocks indexing by default."
+  },
+  {
+    "parent_rule_name": "jobdivaRule2",
+    "display_name": "JobDiva",
+    "last_verified": "2026-09-25",
+    "url_signatures": ["jobdiva.com", "www2.jobdiva.com", "candidates/myjobs"],
+    "html_signatures": ["jobdiva.com", "jobdiva"],
+    "url_vars_extract": { "method": "regex", "value": "[?&]a=([^&#]+)" },
+    "url_start_extract": null,
+    "notes": "URL_VARS is the client key from the a= query parameter"
   }
 ]

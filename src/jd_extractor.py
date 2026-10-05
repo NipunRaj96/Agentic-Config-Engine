@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -30,6 +31,55 @@ from src.models import GeneratorInput
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
+
+_DEFAULT_UNREACHABLE_SIGNALS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "knowledge_base",
+    "unreachable_jd_signals.json",
+)
+
+
+@dataclass
+class UnreachableJDSignals:
+    blocked_schemes_and_prefixes: list[str] = field(default_factory=lambda: [
+        "javascript:", "mailto:", "tel:", "whatsapp:", "wa.me/", "#"
+    ])
+    document_extensions: list[str] = field(default_factory=lambda: [
+        ".pdf", ".doc", ".docx", ".rtf", ".zip", ".xlsx", ".xls", ".csv", ".odt", ".ppt", ".pptx"
+    ])
+    file_sharing_domains: list[str] = field(default_factory=lambda: [
+        "drive.google.com", "docs.google.com/document", "docs.google.com/file",
+        "dropbox.com", "onedrive.live.com", "sharepoint.com", "box.com"
+    ])
+    external_form_domains: list[str] = field(default_factory=lambda: [
+        "forms.gle", "docs.google.com/forms", "typeform.com", "jotform.com", "surveymonkey.com"
+    ])
+    unreachable_status_codes: list[int] = field(default_factory=lambda: [
+        400, 401, 403, 404, 410, 500, 502, 503, 504
+    ])
+    blocked_mime_types: list[str] = field(default_factory=lambda: [
+        "application/pdf", "application/octet-stream", "application/msword",
+        "application/vnd.openxmlformats-officedocument", "application/zip"
+    ])
+
+    @classmethod
+    def load(cls, path: str = _DEFAULT_UNREACHABLE_SIGNALS_PATH) -> "UnreachableJDSignals":
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return cls(
+                    blocked_schemes_and_prefixes=data.get("blocked_schemes_and_prefixes", cls().blocked_schemes_and_prefixes),
+                    document_extensions=data.get("document_extensions", cls().document_extensions),
+                    file_sharing_domains=data.get("file_sharing_domains", cls().file_sharing_domains),
+                    external_form_domains=data.get("external_form_domains", cls().external_form_domains),
+                    unreachable_status_codes=data.get("unreachable_status_codes", cls().unreachable_status_codes),
+                    blocked_mime_types=data.get("blocked_mime_types", cls().blocked_mime_types),
+                )
+        except Exception as exc:
+            logger.warning("UnreachableJDSignals: failed to load %s (%s), using fallbacks", path, exc)
+        return cls()
+
 
 _JD_FETCH_TIMEOUT = 12
 _NOISE_HEADERS = frozenset({
@@ -147,9 +197,44 @@ class JDExtractor:
     adaptive prompting, and deterministic multi-sample validation.
     """
 
-    def __init__(self, llm_client: Optional[LLMClient] = None) -> None:
+    def __init__(self, llm_client: Optional[LLMClient] = None, signals_path: Optional[str] = None) -> None:
         self._llm = llm_client or LLMClient()
         self._detector = JDDetector.get_instance()
+        self._unreachable_signals = UnreachableJDSignals.load(signals_path) if signals_path else UnreachableJDSignals.load()
+
+    def is_unsupported_jd_url(self, url: str) -> tuple[bool, str]:
+        """
+        Checks if a URL is non-routable, an external document/form, or a file download
+        where extracting a standard HTML/JSON JD is impossible.
+        """
+        if not url or not isinstance(url, str):
+            return True, "Empty or invalid URL"
+        
+        clean_u = url.strip()
+        u_lower = clean_u.lower()
+        
+        # 1. Blocked scheme/prefix check
+        for prefix in self._unreachable_signals.blocked_schemes_and_prefixes:
+            if u_lower.startswith(prefix.lower()):
+                return True, f"Blocked scheme/prefix '{prefix}'"
+            
+        # 2. Document extension check (ignoring query parameters & hash)
+        path_part = u_lower.split("?")[0].split("#")[0]
+        for ext in self._unreachable_signals.document_extensions:
+            if path_part.endswith(ext.lower()):
+                return True, f"Document/file download extension '{ext}'"
+                
+        # 3. File sharing domain check
+        for domain in self._unreachable_signals.file_sharing_domains:
+            if domain.lower() in u_lower:
+                return True, f"Cloud file sharing domain '{domain}'"
+                
+        # 4. External form domain check
+        for domain in self._unreachable_signals.external_form_domains:
+            if domain.lower() in u_lower:
+                return True, f"External form domain '{domain}'"
+                
+        return False, ""
 
     def extract(
         self,
@@ -176,6 +261,16 @@ class JDExtractor:
 
         primary_url = valid_urls[0]
         cached_payloads = cached_payloads or {}
+
+        # 0. Check if primary URL is unsupported/external/file
+        is_unsupported, reason = self.is_unsupported_jd_url(primary_url)
+        if is_unsupported:
+            logger.info("JDExtractor: detail URL %s is unsupported for HTML extraction (%s)", primary_url, reason)
+            return JDExtractionResult(
+                strategy="NONE",
+                detail_url=primary_url,
+                error_msg=f"Unsupported detail URL ({reason}): {primary_url}"
+            )
 
         # 1. Fetch Primary Payload
         raw_payload, content_type = self._fetch_payload(primary_url, request_headers, cached_payloads)
@@ -441,9 +536,23 @@ class JDExtractor:
                 allow_redirects=True,
                 verify=False,
             )
+            content_type = resp.headers.get("Content-Type", "")
+            
+            # Check for unreachable/server error status codes (e.g. 404, 500)
+            if resp.status_code in self._unreachable_signals.unreachable_status_codes:
+                logger.info("JDExtractor: detail URL %s returned unreachable HTTP status %d", url, resp.status_code)
+                return None, None
+
+            # Check for blocked non-HTML MIME types (e.g. application/pdf, binary)
+            content_type_lower = content_type.lower()
+            for mime in self._unreachable_signals.blocked_mime_types:
+                if mime.lower() in content_type_lower:
+                    logger.info("JDExtractor: detail URL %s returned non-HTML MIME type '%s'", url, content_type)
+                    return None, None
+
             if resp.status_code == 200 and resp.text:
                 cached_payloads[url] = resp.text
-                return resp.text, resp.headers.get("Content-Type", "")
+                return resp.text, content_type
         except Exception as exc:
             logger.debug("JDExtractor: network fetch failed for %s (%s)", url, exc)
 

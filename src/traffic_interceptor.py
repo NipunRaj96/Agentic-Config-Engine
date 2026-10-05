@@ -132,6 +132,7 @@ class TrafficInterceptor(PipelineStep):
         response_bodies: dict[str, Optional[str]] = {}
         response_headers_map: dict[str, dict]     = {}
         response_statuses: dict[str, int]         = {}
+        response_map_by_key: dict[tuple[str, str, Optional[str]], tuple[Optional[str], dict, int]] = {}
 
         try:
             browser = self._get_browser()
@@ -146,17 +147,20 @@ class TrafficInterceptor(PipelineStep):
 
         def _on_response(response) -> None:
             try:
+                req = response.request
                 url = response.url
-                if self._should_ignore(url, response.request.resource_type):
+                if self._should_ignore(url, req.resource_type):
                     return
                 body: Optional[str] = None
                 try:
                     body = response.text()
                 except Exception:
                     pass
+                req_body = req.post_data
                 response_bodies[url] = body
                 response_headers_map[url] = dict(response.headers)
                 response_statuses[url] = response.status
+                response_map_by_key[(req.method, url, req_body)] = (body, dict(response.headers), response.status)
             except Exception as exc:
                 logger.debug("Response handler error: %s", exc)
 
@@ -214,17 +218,20 @@ class TrafficInterceptor(PipelineStep):
         try:
             # Common patterns for load more buttons / next page links / page numbers
             selectors = [
+                ".awsm-load-more-btn", ".awsm-load-more", ".awsm-jobs-pagination a", ".awsm-jobs-pagination button",
                 "button:has-text('load more')", "button:has-text('Load More')", "button:has-text('view more')",
                 "a:has-text('load more')", "a:has-text('Load More')", "a:has-text('view more')",
-                ".load-more", "#load-more", ".loadmore", "#loadmore",
+                ".load-more", "#load-more", ".loadmore", "#loadmore", ".load-more-btn", ".loadmore-btn",
                 "button:has-text('Show more')", "a:has-text('Show more')",
                 # Next Page / Pagination selectors
+                "a.page-numbers", ".page-numbers a", ".pagination a", "ul.pagination li a", ".nav-links a",
+                "a[data-page]", "button[data-page]",
                 "a:has-text('Next')", "button:has-text('Next')",
                 "a:has-text('next')", "button:has-text('next')",
                 "[aria-label*='next' i]",
                 ".next", ".pagination-next", "a[rel='next']"
             ]
-            max_clicks = 10
+            max_clicks = 5
             click_count = 0
             prev_html = ""
             while click_count < max_clicks:
@@ -245,14 +252,32 @@ class TrafficInterceptor(PipelineStep):
                         if el.is_visible() and el.is_enabled():
                             # Check if the element or its parent is disabled
                             class_attr = el.get_attribute("class") or ""
-                            parent_class = page.evaluate("el => el.parentElement ? el.parentElement.className : ''", el)
+                            try:
+                                parent_class = el.evaluate("el => el.parentElement ? el.parentElement.className : ''") or ""
+                            except Exception:
+                                parent_class = ""
                             if "disabled" in class_attr.lower() or "disabled" in parent_class.lower():
                                 continue
 
                             logger.info("TrafficInterceptor: Clicking pagination element: %s (click %d)", selector, click_count + 1)
                             try:
-                                el.click(timeout=5000)
-                                page.wait_for_timeout(3000)
+                                el.scroll_into_view_if_needed(timeout=2000)
+                                page.wait_for_timeout(500)
+                                try:
+                                    handle = el.element_handle()
+                                    if handle:
+                                        page.evaluate("el => el.click()", handle)
+                                    else:
+                                        el.click(timeout=5000)
+                                except Exception:
+                                    el.click(timeout=5000)
+                                
+                                # Wait for network response to settle
+                                try:
+                                    page.wait_for_load_state("networkidle", timeout=3000)
+                                except Exception:
+                                    page.wait_for_timeout(2500)
+
                                 # Append the new HTML content after pagination action
                                 accumulated_html.append(page.content())
                                 clicked_any = True
@@ -292,14 +317,20 @@ class TrafficInterceptor(PipelineStep):
         context.close()   # isolate: close context, NOT browser
 
         # ── Enrich captured requests with response bodies ───────────────────────
-        enriched: list[CapturedRequest] = [
-            req.model_copy(update={
-                "response_body": response_bodies.get(req.url),
-                "response_headers": response_headers_map.get(req.url, {}),
-                "response_status": response_statuses.get(req.url, 0),
-            })
-            for req in captured
-        ]
+        enriched: list[CapturedRequest] = []
+        for req in captured:
+            req_key = (req.method, req.url, req.request_body)
+            if req_key in response_map_by_key:
+                b, h, s = response_map_by_key[req_key]
+            else:
+                b = response_bodies.get(req.url)
+                h = response_headers_map.get(req.url, {})
+                s = response_statuses.get(req.url, 0)
+            enriched.append(req.model_copy(update={
+                "response_body": b,
+                "response_headers": h,
+                "response_status": s,
+            }))
 
         # ── Build HTML candidates for LOCRGXGenerator ───────────────────────────
         for req in enriched:
@@ -307,17 +338,24 @@ class TrafficInterceptor(PipelineStep):
             if not (200 <= req.response_status < 300):
                 continue
 
-            # Exclude JSON/prefetch endpoints from the HTML/LOCRGX candidate pool
+            # Exclude JSON/prefetch/script endpoints from the HTML/LOCRGX candidate pool
             url_lower = req.url.lower()
             ct = req.response_headers.get("content-type", "").lower()
-            is_json_like = (
+            is_json_or_script = (
                 "application/json" in ct or
                 "application/octet-stream" in ct or
+                "application/javascript" in ct or
+                "text/javascript" in ct or
                 url_lower.endswith(".json") or
+                url_lower.endswith(".js") or
+                ".js?" in url_lower or
+                url_lower.endswith(".css") or
                 "_next/data/" in url_lower or
-                "page-data" in url_lower
+                "page-data" in url_lower or
+                "nopaperforms" in url_lower or
+                "widget" in url_lower
             )
-            if is_json_like:
+            if is_json_or_script:
                 continue
 
             body = req.response_body or ""
@@ -382,7 +420,7 @@ class TrafficInterceptor(PipelineStep):
 
     def _is_dead_site(self, url: str) -> tuple[bool, str]:
         """
-        Fast pre-flight: try a HEAD (or GET) request with a short timeout.
+        Fast pre-flight: try a HEAD (or fallback GET) request with a short timeout.
         Returns (is_dead, reason_string).
         Treats 4xx as dead. 403 is NOT dead (bot protection, site is alive).
         Ignores SSL errors (site may still work in browser).
@@ -390,12 +428,23 @@ class TrafficInterceptor(PipelineStep):
         import requests as _req   # local import — requests already in requirements
         try:
             resp = _req.head(
-                url, timeout=8, allow_redirects=True,
+                url, timeout=20, allow_redirects=True,
                 headers={"User-Agent": _USER_AGENT},
             )
             status = resp.status_code
-            if status == 404:
-                return True, f"HTTP {status} Not Found"
+            if status in (404, 405):
+                # Many enterprise CDNs / career portals (e.g. ADP, Phenom People, Workday)
+                # reject HTTP HEAD with 404/405. Perform a lightweight GET probe before declaring dead.
+                try:
+                    resp_get = _req.get(
+                        url, timeout=10, allow_redirects=True, stream=True,
+                        headers={"User-Agent": _USER_AGENT},
+                    )
+                    if resp_get.status_code < 400 or resp_get.status_code == 403:
+                        return False, ""
+                    return True, f"HTTP {resp_get.status_code} Not Found"
+                except Exception:
+                    return True, f"HTTP {status} Not Found"
             if status in (410, 451):          # Gone / Unavailable for Legal
                 return True, f"HTTP {status}"
             # 403 = bot block but site is alive; 5xx = server error (transient)
@@ -405,16 +454,22 @@ class TrafficInterceptor(PipelineStep):
             # If it responds (even with bad cert) → let Playwright try (it handles SSL).
             # If it still fails → site is genuinely unreachable via HTTPS.
             try:
-                resp2 = _req.head(url, timeout=6, allow_redirects=True,
+                resp2 = _req.head(url, timeout=10, allow_redirects=True,
                                   headers={"User-Agent": _USER_AGENT}, verify=False)
                 logger.debug("SSL retry (verify=False) status=%s for %s", resp2.status_code, url)
+                if resp2.status_code in (404, 405):
+                    resp2_get = _req.get(url, timeout=10, allow_redirects=True, stream=True,
+                                         headers={"User-Agent": _USER_AGENT}, verify=False)
+                    if resp2_get.status_code < 400 or resp2_get.status_code == 403:
+                        return False, ""
+                    return True, f"HTTP {resp2_get.status_code} Not Found"
                 return False, ""   # site alive with bad cert — Playwright will handle
             except Exception:
                 return True, "SSL certificate error — HTTPS handshake failed"
         except _req.exceptions.ConnectionError as exc:
             return True, f"Connection refused: {str(exc)[:60]}"
         except _req.exceptions.Timeout:
-            return True, "HEAD request timed out (8s)"
+            return True, "HEAD request timed out (20s)"
         except Exception as exc:
             logger.debug("Dead-site HEAD check error (ignoring): %s", exc)
             return False, ""   # Unknown error — let Playwright try

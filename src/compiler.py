@@ -53,7 +53,8 @@ _NOISE_HEADERS = frozenset({
     "cookie", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
     "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
     "upgrade-insecure-requests", "accept-language", "accept-encoding",
-    "x-forwarded-for", "x-real-ip",
+    "x-forwarded-for", "x-real-ip", "content-length", "host",
+    "connection", "priority", "user-agent",
 })
 
 
@@ -116,7 +117,7 @@ class Compiler:
 
         # ── MOVE_TO_JD from LLM notes or result ──────────────────────────────
         move_to_jd = getattr(result, "move_to_jd", None)
-        if move_to_jd is None or move_to_jd == 0:
+        if move_to_jd is None:
             move_to_jd = self._extract_move_to_jd(result)
         body["MOVE_TO_JD"] = move_to_jd
 

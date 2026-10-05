@@ -690,7 +690,10 @@ class LLMClient:
 
             if attempt < max_attempts - 1:
                 token = self._get_astra_session_token(force_refresh=True)
-                time.sleep(1.5)
+                import random
+                backoff_s = (3.0 * (2 ** attempt)) + random.uniform(0.5, 2.0)
+                logger.info("LLMClient: Waiting %.2fs (exponential backoff + jitter) before Astra retry...", backoff_s)
+                time.sleep(backoff_s)
 
         return None
 
